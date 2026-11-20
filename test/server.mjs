@@ -1,0 +1,49 @@
+import { createServer } from 'node:http';
+import { createReadStream, statSync } from 'node:fs';
+import { extname, resolve, sep } from 'node:path';
+
+const types = {
+  '.html': 'text/html; charset=utf-8', '.js': 'application/javascript',
+  '.css': 'text/css', '.mp4': 'video/mp4', '.jpg': 'image/jpeg', '.png': 'image/png',
+  '.m3u8': 'application/vnd.apple.mpegurl', '.ts': 'video/mp2t',
+};
+const files = resolve('dist');
+const fixtures = resolve('test/fixtures');
+
+function serve(path, req, res) {
+  try {
+    const { size } = statSync(path);
+    const type = types[extname(path)];
+    const match = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '');
+    const start = match ? Number(match[1]) : 0;
+    const end = match?.[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+    if (start > end) return res.writeHead(416, { 'Content-Range': 'bytes */' + size }).end();
+    const headers = { 'Content-Type': type, 'Content-Length': end - start + 1, 'Accept-Ranges': 'bytes' };
+    if (match) headers['Content-Range'] = 'bytes ' + start + '-' + end + '/' + size;
+    res.writeHead(match ? 206 : 200, headers);
+    if (req.method === 'HEAD') return res.end();
+    createReadStream(path, { start, end }).pipe(res);
+  } catch {
+    res.writeHead(404).end();
+  }
+}
+
+createServer((req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  if (url.pathname === '/embed') {
+    const config = JSON.parse(url.searchParams.get('config') ?? '{}');
+    const json = JSON.stringify(config).replaceAll('<', '\\u003c');
+    const html = '<!doctype html><meta charset=utf-8><link rel=stylesheet href=/native-il-player.css>' +
+      '<div id=il-player></div><script id=il-player-config type=application/json>' + json +
+      '</script><script type=module src=/native-il-player.js></script>';
+    return res.writeHead(200, { 'Content-Type': types['.html'] }).end(html);
+  }
+  if (url.pathname === '/host') {
+    return res.writeHead(200, { 'Content-Type': types['.html'] }).end('<!doctype html><body></body>');
+  }
+  const isFixture = url.pathname.startsWith('/fixtures/');
+  const root = isFixture ? fixtures : files;
+  const path = resolve(root, '.' + (isFixture ? url.pathname.slice('/fixtures'.length) : url.pathname === '/' ? '/index.html' : url.pathname));
+  if (!path.startsWith(root + sep)) return res.writeHead(404).end();
+  serve(path, req, res);
+}).listen(Number(process.argv[2]), '127.0.0.1');
