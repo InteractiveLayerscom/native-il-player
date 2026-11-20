@@ -4,7 +4,7 @@
   --il-player-controls: #fff;
   --il-player-background: #101114;
   --il-player-bar: #15161a;
-  --il-player-bar: color-mix(in srgb, var(--il-player-background) 88%, #737880 12%);
+  --il-player-bar: var(--il-player-primary, color-mix(in srgb, var(--il-player-background) 88%, #737880 12%));
   --il-player-hover: color-mix(in srgb, var(--il-player-bar) 85%, var(--il-player-controls) 15%);
   --il-player-track: color-mix(in srgb, var(--il-player-bar) 67%, var(--il-player-controls) 33%);
   --il-player-menu-height: min(15rem, calc(56.25cqw - 60px));

@@ -8,6 +8,17 @@ const paths = {
   chapters: ['M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01'],
   fullscreen: ['M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5'],
   shrink: ['M4 9h5V4m11 5h-5V4M9 20v-5H4m11 5v-5h5'],
+  heart: ['M12 20S4 15.5 4 9.5a4 4 0 0 1 8-1.2 4 4 0 0 1 8 1.2c0 6-8 10.5-8 10.5z'],
+  bookmark: ['M6 4h12v16l-6-4-6 4z'],
+  share: ['M12 15V3m-4 4 4-4 4 4M6 11H4v9h16v-9h-2'],
+  code: ['m8 7-5 5 5 5m8-10 5 5-5 5m-3-12-2 14'],
+  highlights: ['m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z'],
+  transcript: ['M7 4h10m-12 5h14M5 14h14m-14 5h10'],
+  close: ['m6 6 12 12m0-12L6 18'],
+  settings: ['M4 7h16M4 12h16M4 17h16M8 5v4m8 1v4m-6 1v4'],
+  pip: ['M4 5h16v14H4zM11 11h9v8h-9z'],
+  cast: ['M4 6h16v12h-5M4 10a8 8 0 0 1 8 8m-8-4a4 4 0 0 1 4 4m-4 0h.01'],
+  airplay: ['M7 16H4V5h16v11h-3m-5-1 5 5H7z'],
 };
 
 export function icon(doc, name) {

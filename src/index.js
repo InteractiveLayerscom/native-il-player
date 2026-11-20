@@ -1,12 +1,16 @@
 import { attachHtmlVideo } from '@interactivelayers/player-sdk';
 import '@interactivelayers/player-sdk/player.css';
 import { demoAsset, demoCaptions, demoChapters, demoClock, demoFeed, demoOriginalLanguage } from './demo.js';
+import { embedMetadata, initialEmbed, mergeEmbed } from './embed-settings.js';
 import { icon } from './icons.js';
 import { copy, normalizeLocale } from './locale.js';
 import { httpUrl, isHlsSource, loadSource } from './source.js';
+import { createPlaybackOptions } from './playback-options.js';
+import { createViewerUI } from './viewer-ui.js';
 import './player.css';
+import './embed.css';
 
-const defaults = { accent: '#163bff', controls: '#ffffff', background: '#101114' };
+const defaults = { primary: null, accent: '#163bff', controls: '#ffffff', background: '#101114' };
 const speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 const demoFormats = ['none', 'super', 'l'];
 const mediaEvents = ['play', 'playing', 'pause', 'ended', 'timeupdate', 'seeking', 'seeked',
@@ -42,13 +46,15 @@ function accentInk(value) {
 }
 
 function safeTracks(video, rows, Cue) {
-  if (!Cue || !Array.isArray(rows)) return [];
-  return rows.flatMap(row => {
+  const tracks = new Map();
+  if (!Cue || !Array.isArray(rows)) return tracks;
+  for (const row of rows) {
     if (typeof row?.language !== 'string' || !row.language.trim() ||
-        typeof row.label !== 'string' || !row.label.trim() || !Array.isArray(row.cues)) return [];
+        typeof row.label !== 'string' || !row.label.trim() || !Array.isArray(row.cues)) continue;
     const cues = row.cues.filter(cue => Number.isFinite(cue?.start) && Number.isFinite(cue?.end) &&
-      cue.start >= 0 && cue.end > cue.start && typeof cue.text === 'string');
-    if (!cues.length) return [];
+      cue.start >= 0 && cue.end > cue.start && typeof cue.text === 'string')
+      .sort((a, b) => a.start - b.start || a.end - b.end);
+    if (!cues.length) continue;
     const track = video.addTextTrack('captions', row.label, row.language);
     for (const cue of cues) {
       const escaped = cue.text.replaceAll('&', '&amp;').replaceAll('<', '&lt;');
@@ -57,8 +63,9 @@ function safeTracks(video, rows, Cue) {
       track.addCue(nativeCue);
     }
     track.mode = 'disabled';
-    return [track];
-  });
+    tracks.set(track, cues);
+  }
+  return tracks;
 }
 
 function cleanChapters(rows) {
@@ -86,6 +93,10 @@ function mount(target, config = {}, bridge = false) {
   const lifecycle = new view.AbortController();
   const bind = (node, type, callback) => node.addEventListener(type, callback, { signal: lifecycle.signal });
   const demo = config.demo === true;
+  const restricted = config.restrict_remote_playback === true;
+  const metadata = embedMetadata(config.metadata, doc.baseURI, demo);
+  let embed = mergeEmbed(initialEmbed(demo && !config.src), config.embed);
+  let source;
   const colors = { ...defaults };
   let locale = normalizeLocale(config.locale);
   let features = config.features ?? {};
@@ -114,7 +125,10 @@ function mount(target, config = {}, bridge = false) {
   const video = node('video', 'video', stage);
   video.playsInline = true;
   video.preload = 'metadata';
-  video.loop = demo && !config.src;
+  video.loop = embed.playback.loop;
+  video.defaultMuted = video.muted = embed.playback.muted;
+  video.autoplay = embed.playback.autoplay && !(demo && config.adapter === 'vast');
+  if (restricted) denyRemotePlayback(video);
   const src = httpUrl(config.src ?? (demo ? demoAsset('program.mp4').href : null), doc.baseURI);
   const poster = httpUrl(config.poster ?? (demo ? demoAsset('poster.jpg').href : null), doc.baseURI);
   if (poster) video.poster = poster.href;
@@ -179,9 +193,20 @@ function mount(target, config = {}, bridge = false) {
   });
 
   const captionsMenu = menu('captions', 'captions');
+  const transcriptButton = button(toolbar, 'button', () => viewerUI.openTranscript(transcriptButton));
+  transcriptButton.setAttribute('aria-expanded', 'false');
+  shape(transcriptButton, 'transcript');
   const chapterMenu = menu('chapters', 'chapters');
   const speedMenu = menu('speed');
+  const optionsMenu = menu('options', 'settings');
   const fullscreen = button(toolbar, 'button', toggleFullscreen);
+  const options = createPlaybackOptions({
+    video, view, menu: optionsMenu, node, button, shape, bind, onFailure: () => fail('optionError'),
+  });
+  const viewerUI = createViewerUI({
+    stage, video, view, metadata, emptyActions: config.preview === true && !demo,
+    node, button, shape, bind, seek, timeLabel: readableTime, onOpen: closeMenu,
+  });
 
   function menu(key, glyph) {
     const wrapper = node('div', 'menu-wrap', toolbar);
@@ -189,10 +214,13 @@ function mount(target, config = {}, bridge = false) {
       if (openMenu === result) closeMenu();
       else {
         closeMenu();
+        viewerUI.close();
         items.hidden = false;
         control.setAttribute('aria-expanded', 'true');
         openMenu = result;
-        (items.querySelector('[aria-pressed="true"]') ?? items.firstElementChild)?.focus();
+        const first = items.querySelector('[aria-pressed="true"]:not([disabled]):not([hidden])') ??
+          Array.from(items.querySelectorAll('button:not([disabled]),select')).find(element => !element.closest('[hidden]'));
+        first?.focus();
       }
     });
     if (glyph) shape(control, glyph);
@@ -223,6 +251,7 @@ function mount(target, config = {}, bridge = false) {
         closeMenu(true);
       });
       item.textContent = option.label;
+      item.disabled = option.disabled === true;
       if (option.pressed !== undefined) item.setAttribute('aria-pressed', String(option.pressed));
       if (option.time !== undefined) {
         const clock = node('span', 'chapter-time', item);
@@ -235,7 +264,7 @@ function mount(target, config = {}, bridge = false) {
     const wanted = Array.isArray(features.languages)
       ? features.languages.filter(language => typeof language === 'string').map(language => language.trim().toLowerCase())
       : null;
-    tracks = features.transcription_enabled === false ? [] : textTracks.filter(
+    tracks = features.transcription_enabled === false ? [] : Array.from(textTracks.keys()).filter(
       track => !wanted || (demo && languageMatch(track.language, demoOriginalLanguage)) ||
       wanted.some(language => languageMatch(track.language, language)),
     );
@@ -243,17 +272,29 @@ function mount(target, config = {}, bridge = false) {
     if (!tracks.includes(activeTrack)) activeTrack = null;
     updateTrackModes();
     closeMenu();
+    viewerUI.close();
     rebuildMenus();
   }
 
   function rebuildMenus() {
-    for (const { key, control, items } of [captionsMenu, chapterMenu, speedMenu]) {
+    for (const { key, control, items } of [captionsMenu, chapterMenu, speedMenu, optionsMenu]) {
       label(control, key);
       items.setAttribute('aria-label', copy[locale][key]);
     }
-    captionsMenu.wrapper.hidden = !!linear || !tracks.length;
-    chapterMenu.wrapper.hidden = !!linear || !chapters.length;
-    speedMenu.wrapper.hidden = !!linear;
+    const flags = embed.controls;
+    captionsMenu.wrapper.hidden = !!linear || !flags.captions || !tracks.length;
+    chapterMenu.wrapper.hidden = !!linear || !flags.chapters || !chapters.length;
+    speedMenu.wrapper.hidden = !!linear || !flags.speed;
+    const chosen = activeTrack ?? tracks.find(track => languageMatch(track.language, locale.toLowerCase())) ?? tracks[0];
+    const transcript = (textTracks.get(chosen) ?? []).map(cue => ({ time: cue.start, text: cue.text }));
+    transcriptButton.hidden = !!linear || !flags.transcript || !transcript.length;
+    label(transcriptButton, 'transcript');
+    const highlights = chapters.length
+      ? chapters.map(chapter => ({ time: chapter.time, text: chapter.title }))
+      : transcript.length <= 8 ? transcript
+      : Array.from({ length: 8 }, (_, index) => transcript[Math.round(index * (transcript.length - 1) / 7)]);
+    viewerUI.update({ embed, words: copy[locale], linear: !!linear, transcript, highlights });
+    refreshPlaybackOptions();
     fillMenu(captionsMenu, [null, ...tracks].map(track => ({
       label: track?.label ?? copy[locale].off,
       pressed: activeTrack === track,
@@ -265,6 +306,7 @@ function mount(target, config = {}, bridge = false) {
     })));
     fillMenu(chapterMenu, chapters.map(chapter => ({
       label: chapter.title, time: chapter.time, select: () => seek(chapter.time),
+      disabled: !embed.playback.allow_seeking,
     })));
     fillMenu(speedMenu, speeds.map(rate => ({
       label: rate + '×', pressed: video.playbackRate === rate,
@@ -274,7 +316,7 @@ function mount(target, config = {}, bridge = false) {
       },
     })));
     markers.replaceChildren();
-    if (Number.isFinite(video.duration) && video.duration > 0) {
+    if (flags.chapters && Number.isFinite(video.duration) && video.duration > 0) {
       for (const chapter of chapters) {
         if (chapter.time <= 0 || chapter.time >= video.duration) continue;
         const mark = node('span', 'marker', markers);
@@ -283,13 +325,22 @@ function mount(target, config = {}, bridge = false) {
     }
   }
 
-  function updateTrackModes() {
-    for (const track of textTracks) track.mode = !linear && activeTrack === track ? 'showing' : 'disabled';
+  function refreshPlaybackOptions() {
+    if (!source) return;
+    options.update(source, embed.controls, copy[locale], !!linear);
+    if (optionsMenu.wrapper.hidden && openMenu === optionsMenu) closeMenu();
+    refreshToolbarVisibility();
   }
 
-  function seek(value) {
+  function updateTrackModes() {
+    for (const track of textTracks.keys()) {
+      track.mode = !linear && embed.controls.captions && activeTrack === track ? 'showing' : 'disabled';
+    }
+  }
+
+  function seek(value, internal = false) {
     const bounds = playbackRange(video);
-    if (!bounds || linear || !Number.isFinite(value)) return;
+    if (!bounds || linear || (!embed.playback.allow_seeking && !internal) || !Number.isFinite(value)) return;
     video.currentTime = Math.min(bounds[1], Math.max(bounds[0], value));
     refresh();
   }
@@ -310,7 +361,9 @@ function mount(target, config = {}, bridge = false) {
   }
 
   async function toggleFullscreen() {
+    if (!embed.controls.fullscreen && !isFullscreen()) return;
     closeMenu();
+    viewerUI.close();
     if (theater) theater = false;
     else {
       try {
@@ -329,6 +382,10 @@ function mount(target, config = {}, bridge = false) {
     refresh();
   }
 
+  function refreshToolbarVisibility() {
+    toolbar.hidden = Array.from(toolbar.children).every(control => control.hidden);
+  }
+
   function refresh() {
     if (disposed) return;
     const media = linear?.video ?? video;
@@ -338,9 +395,16 @@ function mount(target, config = {}, bridge = false) {
       shape(control, playLabel);
       control.disabled = !src;
     }
-    center.hidden = !media.paused && !media.ended;
+    const flags = embed.controls;
+    play.hidden = flags.play === 'center' || flags.play === 'hidden';
+    center.hidden = flags.play === 'bar' || flags.play === 'hidden' || (!media.paused && !media.ended);
+    video.dataset.clickPlay = String(flags.play !== 'hidden');
+    timeline.hidden = time.hidden = !flags.progress;
+    volumeGroup.hidden = !flags.volume;
+    fullscreen.hidden = !flags.fullscreen;
+    refreshToolbarVisibility();
     const bounds = playbackRange(media);
-    progress.disabled = !!linear || !bounds;
+    progress.disabled = !!linear || !embed.playback.allow_seeking || !bounds;
     progress.min = String(bounds?.[0] ?? 0);
     progress.max = String(bounds?.[1] ?? 1);
     progress.value = String(media.currentTime);
@@ -382,6 +446,7 @@ function mount(target, config = {}, bridge = false) {
   }
 
   function toggle() {
+    if (embed.controls.play === 'hidden') return;
     const media = linear?.video ?? video;
     if (!media.paused) media.pause();
     else if (demo && config.adapter === 'vast' && !linearSeen) startLinear(true);
@@ -395,6 +460,8 @@ function mount(target, config = {}, bridge = false) {
     linearSeen = true;
     const ad = node('video', 'video il-player__video--linear', stage);
     ad.playsInline = true;
+    denyRemotePlayback(ad);
+    ad.disablePictureInPicture = true;
     ad.volume = video.volume;
     ad.muted = video.muted;
     ad.src = demoAsset('linear.mp4').href;
@@ -405,6 +472,7 @@ function mount(target, config = {}, bridge = false) {
     video.pause();
     video.hidden = true;
     closeMenu();
+    viewerUI.close();
     updateTrackModes();
     rebuildMenus();
     for (const event of mediaEvents) listen(event, refresh);
@@ -444,10 +512,24 @@ function mount(target, config = {}, bridge = false) {
     });
   }
 
+  function autoplay() {
+    if (demo && config.adapter === 'vast' && !linearSeen) startLinear(true);
+    else if (video.paused && !linear) void playMedia(video).catch(() => {});
+  }
+
   function updateAppearance(patch = {}) {
     if (disposed || !patch || typeof patch !== 'object') return;
     if (typeof patch.locale === 'string') locale = normalizeLocale(patch.locale);
     if (patch.features && typeof patch.features === 'object') features = { ...features, ...patch.features };
+    const previous = embed.playback;
+    embed = mergeEmbed(embed, patch.embed);
+    const playback = embed.playback;
+    if (previous.loop !== playback.loop) video.loop = playback.loop;
+    if (previous.autoplay !== playback.autoplay) video.autoplay = playback.autoplay && !(demo && config.adapter === 'vast');
+    if (previous.muted !== playback.muted) {
+      video.defaultMuted = video.muted = playback.muted;
+      if (linear) linear.video.muted = playback.muted;
+    }
     for (const key of Object.keys(colors)) {
       colors[key] = color(patch.colors?.[key], colors[key]);
       stage.style.setProperty('--il-player-' + key, colors[key]);
@@ -460,13 +542,14 @@ function mount(target, config = {}, bridge = false) {
     if (demoFormats.includes(patch.demoAd)) feed?.configure(patch.demoAd);
     refreshMenus();
     refresh();
+    if (playback.autoplay && !previous.autoplay) autoplay();
   }
 
   function simulate(format) {
     if (!demo || disposed) return;
     if (format === 'linear') startLinear(!video.paused);
     else if (!linear && (format === 'super' || format === 'l')) {
-      if (Number.isFinite(video.duration) && video.currentTime + 5 >= video.duration) seek(0);
+      if (Number.isFinite(video.duration) && video.currentTime + 5 >= video.duration) seek(0, true);
       feed.trigger(format, demoClock(video));
       void playMedia(video, true).catch(playError => {
         if (!disposed && playError.name !== 'AbortError') fail('playError');
@@ -480,13 +563,16 @@ function mount(target, config = {}, bridge = false) {
   const sdkEvents = !!eventsUrl && !!sessionId;
   const programOrigin = typeof config.programDateTime === 'string' ? Date.parse(config.programDateTime) : null;
   const feed = demo ? demoFeed(config.demoAd, () => locale) : null;
-  const parentOrigin = bridge && demo ? sameOriginParent(view) : null;
+  const parentOrigin = bridge && (demo || config.preview === true) ? sameOriginParent(view) : null;
   function notifyDemo(format) {
     if (parentOrigin) view.parent.postMessage({ type: 'il-player:demo-started', format }, parentOrigin);
     stage.dispatchEvent(new view.CustomEvent('il-player:demo-started', { bubbles: true, detail: { format } }));
   }
-  const source = loadSource(video, src, hls, {
+  source = loadSource(video, src, hls, {
     onError: () => fail('loadError'),
+    onChoices: refreshPlaybackOptions,
+    preferNative: !restricted && (embed.controls.airplay || embed.controls.cast) &&
+      typeof video.webkitShowPlaybackTargetPicker === 'function',
     onManifest: !demo && !sdkEvents ? text => sdk?.updateManifest(text) : undefined,
   });
   const sdk = demo || sdkEvents || hls ? attachHtmlVideo({
@@ -499,7 +585,10 @@ function mount(target, config = {}, bridge = false) {
   }) : null;
 
   for (const event of mediaEvents) bind(video, event, refresh);
-  bind(video, 'loadedmetadata', rebuildMenus);
+  bind(video, 'loadedmetadata', () => {
+    viewerUI.restoreBookmark();
+    rebuildMenus();
+  });
   bind(video, 'error', () => fail('loadError'));
   bind(video, 'playing', () => {
     errorKind = null;
@@ -510,20 +599,26 @@ function mount(target, config = {}, bridge = false) {
   bind(doc, 'webkitfullscreenchange', refresh);
   bind(doc, 'pointerdown', event => {
     if (openMenu && !openMenu.wrapper.contains(event.target)) closeMenu();
+    viewerUI.closeOutside(event.target);
+  });
+  bind(stage, 'contextmenu', event => {
+    if (!embed.playback.context_menu) event.preventDefault();
   });
   bind(stage, 'keydown', event => {
-    if (event.key === 'Escape' && openMenu) {
+    if (event.key === 'Escape' && viewerUI.close(true)) {
+      event.preventDefault();
+    } else if (event.key === 'Escape' && openMenu) {
       event.preventDefault();
       closeMenu(true);
     } else if (event.key === 'Escape' && theater) {
       event.preventDefault();
       void toggleFullscreen();
     } else if (event.target === stage) {
-      if (event.key === ' ' || event.key === 'k') toggle();
-      else if (event.key === 'ArrowLeft') seek(video.currentTime - 5);
-      else if (event.key === 'ArrowRight') seek(video.currentTime + 5);
-      else if (event.key === 'm') toggleMute();
-      else if (event.key === 'f') void toggleFullscreen();
+      if ((event.key === ' ' || event.key === 'k') && embed.controls.play !== 'hidden') toggle();
+      else if (event.key === 'ArrowLeft' && embed.playback.allow_seeking) seek(video.currentTime - 5);
+      else if (event.key === 'ArrowRight' && embed.playback.allow_seeking) seek(video.currentTime + 5);
+      else if (event.key === 'm' && embed.controls.volume) toggleMute();
+      else if (event.key === 'f' && embed.controls.fullscreen) void toggleFullscreen();
       else return;
       event.preventDefault();
     }
@@ -541,6 +636,8 @@ function mount(target, config = {}, bridge = false) {
       if (disposed) return;
       disposed = true;
       lifecycle.abort();
+      viewerUI.destroy();
+      options.destroy();
       sdk?.destroy();
       video.pause();
       if (linear) releaseLinear();
@@ -551,8 +648,15 @@ function mount(target, config = {}, bridge = false) {
   };
   mounted.set(host, controller);
   updateAppearance(config);
+  if (embed.playback.autoplay) autoplay();
   if (parentOrigin) view.parent.postMessage({ type: 'il-player:ready' }, parentOrigin);
   return controller;
+}
+
+function denyRemotePlayback(video) {
+  video.disableRemotePlayback = true;
+  video.setAttribute('disableremoteplayback', '');
+  video.setAttribute('x-webkit-airplay', 'deny');
 }
 
 function sameOriginParent(view) {
