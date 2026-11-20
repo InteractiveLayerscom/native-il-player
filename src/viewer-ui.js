@@ -1,6 +1,6 @@
 import { viewerStorage } from './viewer-storage.js';
 
-export function createViewerUI({ stage, video, view, metadata, emptyActions, node, button, shape, bind, seek, timeLabel, onOpen }) {
+export function createViewerUI({ stage, video, view, metadata, emptyActions, node, button, shape, bind, seek, timeLabel, onOpen, adPlaying }) {
   const top = node('div', 'top', stage);
   top.hidden = true;
   const details = node('div', 'identity', top);
@@ -197,7 +197,7 @@ export function createViewerUI({ stage, video, view, metadata, emptyActions, nod
   });
 
   function bookmark(force) {
-    if (!bookmarkReady || !model?.embed.engagement.watch_later || !model.embed.playback.allow_seeking) return;
+    if (!bookmarkReady || adPlaying() || !model?.embed.engagement.watch_later || !model.embed.playback.allow_seeking) return;
     const saved = storage?.get()?.watchAt;
     if (saved == null || !Number.isFinite(video.currentTime)) return;
     const position = video.ended ? 0 : video.currentTime;

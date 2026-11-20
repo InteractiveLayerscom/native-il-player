@@ -109,6 +109,9 @@ function mount(target, config = {}, bridge = false) {
   let tracks = [];
   let chapters = [];
   let disposed = false;
+  let ads = null;
+  let adsStarted = false;
+  let adBreak = false;
 
   const node = (tag, css, parent) => {
     const element = doc.createElement(tag);
@@ -123,6 +126,9 @@ function mount(target, config = {}, bridge = false) {
   host.replaceChildren(stage);
 
   const video = node('video', 'video', stage);
+  const plan = !demo && config.preview !== true && config.ads?.plan && typeof config.ads.plan === 'object' &&
+    !Array.isArray(config.ads.plan) ? config.ads.plan : null;
+  const adContainer = plan ? node('div', 'ad-container', stage) : null;
   video.playsInline = true;
   video.preload = 'metadata';
   video.loop = embed.playback.loop;
@@ -206,6 +212,7 @@ function mount(target, config = {}, bridge = false) {
   const viewerUI = createViewerUI({
     stage, video, view, metadata, emptyActions: config.preview === true && !demo,
     node, button, shape, bind, seek, timeLabel: readableTime, onOpen: closeMenu,
+    adPlaying: () => adBreak,
   });
 
   function menu(key, glyph) {
@@ -340,7 +347,7 @@ function mount(target, config = {}, bridge = false) {
 
   function seek(value, internal = false) {
     const bounds = playbackRange(video);
-    if (!bounds || linear || (!embed.playback.allow_seeking && !internal) || !Number.isFinite(value)) return;
+    if (!bounds || linear || adBreak || (!embed.playback.allow_seeking && !internal) || !Number.isFinite(value)) return;
     video.currentTime = Math.min(bounds[1], Math.max(bounds[0], value));
     refresh();
   }
@@ -404,7 +411,7 @@ function mount(target, config = {}, bridge = false) {
     fullscreen.hidden = !flags.fullscreen;
     refreshToolbarVisibility();
     const bounds = playbackRange(media);
-    progress.disabled = !!linear || !embed.playback.allow_seeking || !bounds;
+    progress.disabled = !!linear || adBreak || !embed.playback.allow_seeking || !bounds;
     progress.min = String(bounds?.[0] ?? 0);
     progress.max = String(bounds?.[1] ?? 1);
     progress.value = String(media.currentTime);
@@ -446,7 +453,9 @@ function mount(target, config = {}, bridge = false) {
   }
 
   function toggle() {
-    if (embed.controls.play === 'hidden') return;
+    if (embed.controls.play === 'hidden' || adBreak) return;
+    startAds();
+    if (adBreak) return;
     const media = linear?.video ?? video;
     if (!media.paused) media.pause();
     else if (demo && config.adapter === 'vast' && !linearSeen) startLinear(true);
@@ -512,7 +521,42 @@ function mount(target, config = {}, bridge = false) {
     });
   }
 
+  function startAds() {
+    if (!plan || adsStarted) return;
+    adsStarted = true;
+    ads?.start();
+  }
+
+  function setAdBreak(active) {
+    if (disposed || adBreak === active) return;
+    adBreak = active;
+    stage.classList.toggle('il-player--ad-break', active);
+    if (active) {
+      closeMenu();
+      viewerUI.close();
+    }
+    refresh();
+  }
+
+  async function attachRealAds() {
+    try {
+      const { attachAds } = await import('@interactivelayers/player-sdk/ads');
+      if (disposed) return;
+      ads = attachAds({
+        session: sdk, video, stage, plan, linear: 'ima', adContainer,
+        onEvent: event => {
+          if (event?.type === 'break_start') setAdBreak(true);
+          else if (event?.type === 'break_end' || event?.type === 'break_error') setAdBreak(false);
+        },
+      });
+      if (adsStarted) ads.start();
+    } catch {
+      setAdBreak(false);
+    }
+  }
+
   function autoplay() {
+    startAds();
     if (demo && config.adapter === 'vast' && !linearSeen) startLinear(true);
     else if (video.paused && !linear) void playMedia(video).catch(() => {});
   }
@@ -573,9 +617,9 @@ function mount(target, config = {}, bridge = false) {
     onChoices: refreshPlaybackOptions,
     preferNative: !restricted && (embed.controls.airplay || embed.controls.cast) &&
       typeof video.webkitShowPlaybackTargetPicker === 'function',
-    onManifest: !demo && !sdkEvents ? text => sdk?.updateManifest(text) : undefined,
+    onManifest: !demo && !sdkEvents && !plan ? text => sdk?.updateManifest(text) : undefined,
   });
-  const sdk = demo || sdkEvents || hls ? attachHtmlVideo({
+  const sdk = plan ? attachHtmlVideo({ video, stage, timeline: 'media' }) : demo || sdkEvents || hls ? attachHtmlVideo({
     video, stage,
     programTime: demo ? () => demoClock(video) : () => source.programTime(programOrigin),
     ...(demo ? {
@@ -584,6 +628,7 @@ function mount(target, config = {}, bridge = false) {
     } : sdkEvents ? { eventsUrl, sessionId } : {}),
   }) : null;
 
+  if (plan) void attachRealAds();
   for (const event of mediaEvents) bind(video, event, refresh);
   bind(video, 'loadedmetadata', () => {
     viewerUI.restoreBookmark();
@@ -638,6 +683,7 @@ function mount(target, config = {}, bridge = false) {
       lifecycle.abort();
       viewerUI.destroy();
       options.destroy();
+      ads?.destroy();
       sdk?.destroy();
       video.pause();
       if (linear) releaseLinear();

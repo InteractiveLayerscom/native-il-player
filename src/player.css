@@ -66,6 +66,17 @@
   text-shadow: 0 1px 3px #000;
 }
 
+.il-player__ad-container {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.il-player--ad-break .il-player__ad-container {
+  pointer-events: auto;
+}
+
 .il-player__video--linear {
   z-index: 2;
   cursor: default;
