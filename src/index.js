@@ -112,6 +112,8 @@ function mount(target, config = {}, bridge = false) {
   let ads = null;
   let adsStarted = false;
   let adBreak = false;
+  let hold = null;
+  let adsFailed = false;
 
   const node = (tag, css, parent) => {
     const element = doc.createElement(tag);
@@ -453,15 +455,14 @@ function mount(target, config = {}, bridge = false) {
   }
 
   function toggle() {
-    if (embed.controls.play === 'hidden' || adBreak) return;
-    startAds();
-    if (adBreak) return;
+    if (embed.controls.play === 'hidden' || adBreak || hold) return;
     const media = linear?.video ?? video;
-    if (!media.paused) media.pause();
-    else if (demo && config.adapter === 'vast' && !linearSeen) startLinear(true);
-    else void playMedia(media).catch(playError => {
+    const play = () => void playMedia(media).catch(playError => {
       if (!disposed && playError.name !== 'AbortError') fail('playError');
     });
+    if (!media.paused) media.pause();
+    else if (demo && config.adapter === 'vast' && !linearSeen) startLinear(true);
+    else if (!startAds(play)) play();
   }
 
   function startLinear(resume) {
@@ -521,10 +522,29 @@ function mount(target, config = {}, bridge = false) {
     });
   }
 
-  function startAds() {
-    if (!plan || adsStarted) return;
+  // The first play starts the ads; with a pre-roll it holds the content until the break starts,
+  // IMA gives up, or 4 seconds pass, because the module skips a pre-roll once content is past 1 s.
+  function startAds(play) {
+    if (!plan || adsStarted) return false;
     adsStarted = true;
     ads?.start();
+    const cuts = ads ? ads.cuts : Array.isArray(plan.cuts) ? plan.cuts : [];
+    if (adsFailed || !cuts.some(cut => cut?.at === 0)) return false;
+    hold = { play, timer: view.setTimeout(releaseHold, 4000) };
+    return true;
+  }
+
+  function endHold() {
+    if (!hold) return null;
+    view.clearTimeout(hold.timer);
+    const { play } = hold;
+    hold = null;
+    return play;
+  }
+
+  function releaseHold() {
+    const play = endHold();
+    if (play && !disposed) play();
   }
 
   function setAdBreak(active) {
@@ -545,20 +565,29 @@ function mount(target, config = {}, bridge = false) {
       ads = attachAds({
         session: sdk, video, stage, plan, linear: 'ima', adContainer,
         onEvent: event => {
-          if (event?.type === 'break_start') setAdBreak(true);
-          else if (event?.type === 'break_end' || event?.type === 'break_error') setAdBreak(false);
+          if (event?.type === 'break_start') {
+            endHold();
+            setAdBreak(true);
+          } else if (event?.type === 'break_end' || event?.type === 'break_error') {
+            // A break error before the first play means IMA gave up: that play is not held.
+            if (event.type === 'break_error' && !adBreak) adsFailed = true;
+            setAdBreak(false);
+            if (event.type === 'break_error') releaseHold();
+          }
         },
       });
       if (adsStarted) ads.start();
     } catch {
+      adsFailed = true;
       setAdBreak(false);
+      releaseHold();
     }
   }
 
   function autoplay() {
-    startAds();
+    const play = () => void playMedia(video).catch(() => {});
     if (demo && config.adapter === 'vast' && !linearSeen) startLinear(true);
-    else if (video.paused && !linear) void playMedia(video).catch(() => {});
+    else if (video.paused && !linear && !hold && !startAds(play)) play();
   }
 
   function updateAppearance(patch = {}) {
@@ -683,6 +712,7 @@ function mount(target, config = {}, bridge = false) {
       lifecycle.abort();
       viewerUI.destroy();
       options.destroy();
+      endHold();
       ads?.destroy();
       sdk?.destroy();
       video.pause();

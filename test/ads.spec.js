@@ -35,13 +35,14 @@ const fakeIma = `(() => {
         log.requests.push({ adsResponse: request.adsResponse, pageUrl: request.pageUrl });
         setTimeout(() => {
           if (window.imaMode === 'error') return this.fire('error', { getError: () => ({}) });
+          if (window.imaMode === 'silent') return;
           const manager = Object.assign(listeners(), {
             init() {},
             resize() {},
             destroy() {},
             start() {
               log.started++;
-              setTimeout(() => manager.fire('pause', {}), 50);
+              setTimeout(() => manager.fire('pause', {}), window.imaPauseDelay ?? 50);
               window.endBreak = () => manager.fire('resume', {});
             },
           });
@@ -209,4 +210,101 @@ test('the console simulation ignores a plan and loads nothing from Google', asyn
   expect(google).toEqual([]);
   expect(seen.ima + seen.gpt + seen.gampad.length).toBe(0);
   await expect(player.locator('.il-player__ad-container')).toHaveCount(0);
+});
+
+const midroll = [{ id: 'mid', at: 8, position: 'midroll', tag_url: 'https://pubads.g.doubleclick.net/gampad/ads?iu=/123/site/video' }];
+
+test('holds the content until the pre-roll starts and plays it after the break', async ({ page }) => {
+  await stubGoogle(page);
+  await page.addInitScript(() => { window.imaPauseDelay = 1500; });
+  await page.goto(embed({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan({ cuts }) } }));
+  const video = page.locator('video');
+  await expect(video).toHaveJSProperty('readyState', 4);
+  await expect.poll(() => page.evaluate(() => window.imaLog?.requests.length)).toBe(1);
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await page.waitForTimeout(700);
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click({ force: true });
+  expect(await video.evaluate(element => element.currentTime)).toBe(0);
+  await expect(video).toHaveJSProperty('paused', true);
+  expect(await page.evaluate(() => window.imaLog.started)).toBe(1);
+  await expect(page.locator('.il-player--ad-break')).toHaveCount(1);
+  expect(await video.evaluate(element => element.currentTime)).toBe(0);
+  await page.evaluate(() => window.endBreak());
+  await expect.poll(() => video.evaluate(element => element.currentTime)).toBeGreaterThan(0.3);
+});
+
+test('starts the content after about 4 seconds when IMA never answers', async ({ page }) => {
+  await stubGoogle(page);
+  await page.addInitScript(() => { window.imaMode = 'silent'; });
+  await page.goto(embed({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan({ cuts }) } }));
+  const video = page.locator('video');
+  await expect(video).toHaveJSProperty('readyState', 4);
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  const clicked = Date.now();
+  await page.waitForTimeout(3000);
+  expect(await video.evaluate(element => element.currentTime)).toBe(0);
+  await expect(video).toHaveJSProperty('paused', false, { timeout: 3000 });
+  const waited = Date.now() - clicked;
+  expect(waited).toBeGreaterThan(3500);
+  expect(waited).toBeLessThan(5500);
+});
+
+test('starts the content at once when the first cut is a mid-roll', async ({ page }) => {
+  await stubGoogle(page);
+  await page.addInitScript(() => { window.imaMode = 'silent'; });
+  await page.goto(embed({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan({ cuts: midroll }) } }));
+  const video = page.locator('video');
+  await expect(video).toHaveJSProperty('readyState', 4);
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await expect(video).toHaveJSProperty('paused', false, { timeout: 1000 });
+});
+
+test('a player destroyed during the hold starts nothing', async ({ page }) => {
+  await stubGoogle(page);
+  await page.addInitScript(() => { window.imaMode = 'silent'; });
+  await page.goto('/host');
+  await page.evaluate(async config => {
+    const { mountILPlayer } = await import('/native-il-player.js');
+    const host = document.createElement('div');
+    document.body.append(host);
+    window.player = mountILPlayer(host, config);
+    window.content = window.player.video;
+    window.played = 0;
+    window.content.addEventListener('play', () => { window.played++; });
+    await new Promise(resolve => window.content.readyState >= 1 ? resolve() : window.content.addEventListener('loadedmetadata', resolve));
+  }, { src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan({ cuts }) } });
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await page.waitForTimeout(500);
+  await page.evaluate(() => window.player.destroy());
+  await page.waitForTimeout(4500);
+  expect(await page.evaluate(() => [window.played, window.content.currentTime])).toEqual([0, 0]);
+});
+
+test('does not save the resume bookmark during a break and saves it again after', async ({ page }) => {
+  await stubGoogle(page);
+  const key = 'interactivelayers.il-player:v1:video-ads';
+  await page.goto(embed({
+    src: program, locale: 'en', metadata: { id: 'video-ads' },
+    embed: { playback: { muted: true }, engagement: { watch_later: true } },
+    ads: { plan: plan({ cuts }) },
+  }));
+  const video = page.locator('video');
+  await expect(video).toHaveJSProperty('readyState', 4);
+  await page.getByRole('button', { name: 'Watch later', exact: true }).click();
+  const saved = () => page.evaluate(name => JSON.parse(localStorage.getItem(name)).watchAt, key);
+  expect(await saved()).toBe(0);
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await expect(page.locator('.il-player--ad-break')).toHaveCount(1);
+  // An ad playing in the same element moves its clock; none of it may reach the bookmark.
+  await video.evaluate(element => { element.currentTime = 7; });
+  await expect.poll(() => video.evaluate(element => element.currentTime)).toBeCloseTo(7, 0);
+  await video.evaluate(element => {
+    for (const type of ['timeupdate', 'pause']) element.dispatchEvent(new Event(type));
+  });
+  expect(await saved()).toBe(0);
+  await page.evaluate(() => window.endBreak());
+  await expect(page.locator('.il-player--ad-break')).toHaveCount(0);
+  await expect(video).toHaveJSProperty('paused', false);
+  await video.evaluate(element => element.pause());
+  await expect.poll(saved).toBeGreaterThan(6.5);
 });
