@@ -167,9 +167,31 @@ test('plays the planned break through IMA and blocks seeking until it ends', asy
   expect(await video.evaluate(element => element.currentTime)).toBe(before);
   await expect(video).toHaveJSProperty('paused', true);
 
-  await page.evaluate(() => window.endBreak());
+  // Every change to the centre button until the first playing event: none may reveal it.
+  await page.evaluate(() => {
+    const center = document.querySelector('.il-player__center');
+    const content = document.querySelector('video');
+    window.centerShown = [];
+    const observer = new MutationObserver(records => {
+      for (const record of records) if (record.oldValue === null) window.centerShown.push('mutation');
+    });
+    observer.observe(center, { attributes: true, attributeFilter: ['hidden'], attributeOldValue: true });
+    const sample = () => {
+      if (!center.hidden) window.centerShown.push('frame');
+      if (!window.playingSeen) requestAnimationFrame(sample);
+    };
+    content.addEventListener('playing', () => {
+      window.playingSeen = true;
+      if (!center.hidden) window.centerShown.push('playing');
+      observer.disconnect();
+    }, { once: true });
+    window.endBreak();
+    sample();
+  });
   await expect(page.locator('.il-player--ad-break')).toHaveCount(0);
   await expect(video).toHaveJSProperty('paused', false);
+  await expect.poll(() => page.evaluate(() => window.playingSeen)).toBe(true);
+  expect(await page.evaluate(() => window.centerShown)).toEqual([]);
   await video.evaluate(element => element.pause());
   await expect(page.locator('.il-player__center')).toBeVisible();
   await video.evaluate(element => element.play());
@@ -313,4 +335,21 @@ test('does not save the resume bookmark during a break and saves it again after'
   await expect(video).toHaveJSProperty('paused', false);
   await video.evaluate(element => element.pause());
   await expect.poll(saved).toBeGreaterThan(6.5);
+});
+
+test('shows the centre play button when the content cannot resume after a break', async ({ page }) => {
+  await stubGoogle(page);
+  await page.goto(embed({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan({ cuts }) } }));
+  const video = page.locator('video');
+  await expect(video).toHaveJSProperty('readyState', 4);
+  await page.locator('.il-player__center').click();
+  await expect(page.locator('.il-player--ad-break')).toHaveCount(1);
+  await expect(page.locator('.il-player__center')).toBeHidden();
+  await video.evaluate(element => {
+    element.play = () => Promise.reject(new DOMException('Blocked', 'NotAllowedError'));
+  });
+  await page.evaluate(() => window.endBreak());
+  await expect(page.locator('.il-player--ad-break')).toHaveCount(0);
+  await expect(page.locator('.il-player__center')).toBeVisible();
+  await expect(video).toHaveJSProperty('paused', true);
 });

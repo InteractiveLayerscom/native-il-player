@@ -114,6 +114,7 @@ function mount(target, config = {}, bridge = false) {
   let adBreak = false;
   let hold = null;
   let adsFailed = false;
+  let resuming = false;
 
   const node = (tag, css, parent) => {
     const element = doc.createElement(tag);
@@ -406,7 +407,7 @@ function mount(target, config = {}, bridge = false) {
     }
     const flags = embed.controls;
     play.hidden = flags.play === 'center' || flags.play === 'hidden';
-    center.hidden = flags.play === 'bar' || flags.play === 'hidden' || !!hold || adBreak || (!media.paused && !media.ended);
+    center.hidden = flags.play === 'bar' || flags.play === 'hidden' || !!hold || adBreak || resuming || (!media.paused && !media.ended);
     video.dataset.clickPlay = String(flags.play !== 'hidden');
     timeline.hidden = time.hidden = !flags.progress;
     volumeGroup.hidden = !flags.volume;
@@ -457,12 +458,13 @@ function mount(target, config = {}, bridge = false) {
   function toggle() {
     if (embed.controls.play === 'hidden' || adBreak || hold) return;
     const media = linear?.video ?? video;
-    const play = () => void playMedia(media).catch(playError => {
+    const play = () => playMedia(media).catch(playError => {
       if (!disposed && playError.name !== 'AbortError') fail('playError');
+      throw playError;
     });
     if (!media.paused) media.pause();
     else if (demo && config.adapter === 'vast' && !linearSeen) startLinear(true);
-    else if (!startAds(play)) play();
+    else if (!startAds(play)) play().catch(() => {});
   }
 
   function startLinear(resume) {
@@ -545,8 +547,19 @@ function mount(target, config = {}, bridge = false) {
   }
 
   function releaseHold() {
-    const play = endHold();
-    if (play && !disposed) play();
+    if (!hold || disposed) return void endHold();
+    resuming = true;
+    resume(endHold());
+  }
+
+  // The player asked the content to play: the centre button stays hidden until it plays or the attempt fails.
+  function resume(start) {
+    resuming = true;
+    refresh();
+    start().catch(() => {
+      resuming = false;
+      refresh();
+    });
   }
 
   function setAdBreak(active) {
@@ -573,7 +586,10 @@ function mount(target, config = {}, bridge = false) {
           } else if (event?.type === 'break_end' || event?.type === 'break_error') {
             // A break error before the first play means IMA gave up: that play is not held.
             if (event.type === 'break_error' && !adBreak) adsFailed = true;
+            const resumes = adBreak;
+            if (resumes) resuming = true;
             setAdBreak(false);
+            if (resumes) resume(() => playMedia(video));
             if (event.type === 'break_error') releaseHold();
           }
         },
@@ -587,9 +603,9 @@ function mount(target, config = {}, bridge = false) {
   }
 
   function autoplay() {
-    const play = () => void playMedia(video).catch(() => {});
+    const play = () => playMedia(video);
     if (demo && config.adapter === 'vast' && !linearSeen) startLinear(true);
-    else if (video.paused && !linear && !hold && !startAds(play)) play();
+    else if (video.paused && !linear && !hold && !startAds(play)) play().catch(() => {});
   }
 
   function updateAppearance(patch = {}) {
@@ -664,6 +680,11 @@ function mount(target, config = {}, bridge = false) {
   bind(video, 'loadedmetadata', () => {
     viewerUI.restoreBookmark();
     rebuildMenus();
+  });
+  for (const event of ['play', 'playing']) bind(video, event, () => {
+    if (!resuming) return;
+    resuming = false;
+    refresh();
   });
   bind(video, 'error', () => fail('loadError'));
   bind(video, 'playing', () => {
