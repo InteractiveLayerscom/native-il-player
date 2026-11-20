@@ -406,7 +406,7 @@ function mount(target, config = {}, bridge = false) {
     }
     const flags = embed.controls;
     play.hidden = flags.play === 'center' || flags.play === 'hidden';
-    center.hidden = flags.play === 'bar' || flags.play === 'hidden' || (!media.paused && !media.ended);
+    center.hidden = flags.play === 'bar' || flags.play === 'hidden' || !!hold || adBreak || (!media.paused && !media.ended);
     video.dataset.clickPlay = String(flags.play !== 'hidden');
     timeline.hidden = time.hidden = !flags.progress;
     volumeGroup.hidden = !flags.volume;
@@ -531,6 +531,7 @@ function mount(target, config = {}, bridge = false) {
     const cuts = ads ? ads.cuts : Array.isArray(plan.cuts) ? plan.cuts : [];
     if (adsFailed || !cuts.some(cut => cut?.at === 0)) return false;
     hold = { play, timer: view.setTimeout(releaseHold, 4000) };
+    refresh();
     return true;
   }
 
@@ -539,6 +540,7 @@ function mount(target, config = {}, bridge = false) {
     view.clearTimeout(hold.timer);
     const { play } = hold;
     hold = null;
+    refresh();
     return play;
   }
 

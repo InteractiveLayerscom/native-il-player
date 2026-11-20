@@ -158,6 +158,7 @@ test('plays the planned break through IMA and blocks seeking until it ends', asy
   await page.getByRole('button', { name: 'Play', exact: true }).first().click();
   await expect.poll(() => page.evaluate(() => window.imaLog.initialized)).toBe(1);
   await expect(page.locator('.il-player--ad-break')).toHaveCount(1);
+  await expect(page.locator('.il-player__center')).toBeHidden();
   await expect(video).toHaveJSProperty('paused', true);
   await expect(page.getByRole('slider', { name: 'Playback position' })).toBeDisabled();
   const before = await video.evaluate(element => element.currentTime);
@@ -169,6 +170,9 @@ test('plays the planned break through IMA and blocks seeking until it ends', asy
   await page.evaluate(() => window.endBreak());
   await expect(page.locator('.il-player--ad-break')).toHaveCount(0);
   await expect(video).toHaveJSProperty('paused', false);
+  await video.evaluate(element => element.pause());
+  await expect(page.locator('.il-player__center')).toBeVisible();
+  await video.evaluate(element => element.play());
   await expect(page.getByRole('slider', { name: 'Playback position' })).toBeEnabled();
   await page.locator('.il-player').focus();
   await page.locator('.il-player').press('ArrowRight');
@@ -221,9 +225,10 @@ test('holds the content until the pre-roll starts and plays it after the break',
   const video = page.locator('video');
   await expect(video).toHaveJSProperty('readyState', 4);
   await expect.poll(() => page.evaluate(() => window.imaLog?.requests.length)).toBe(1);
-  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await page.locator('.il-player__center').click();
+  await expect(page.locator('.il-player__center')).toBeHidden();
   await page.waitForTimeout(700);
-  await page.getByRole('button', { name: 'Play', exact: true }).first().click({ force: true });
+  await page.locator('.il-player__button--play').click();
   expect(await video.evaluate(element => element.currentTime)).toBe(0);
   await expect(video).toHaveJSProperty('paused', true);
   expect(await page.evaluate(() => window.imaLog.started)).toBe(1);
@@ -243,6 +248,7 @@ test('starts the content after about 4 seconds when IMA never answers', async ({
   const clicked = Date.now();
   await page.waitForTimeout(3000);
   expect(await video.evaluate(element => element.currentTime)).toBe(0);
+  await expect(page.locator('.il-player__center')).toBeHidden();
   await expect(video).toHaveJSProperty('paused', false, { timeout: 3000 });
   const waited = Date.now() - clicked;
   expect(waited).toBeGreaterThan(3500);
