@@ -109,6 +109,12 @@ function mount(target, config = {}, bridge = false) {
   let tracks = [];
   let chapters = [];
   let disposed = false;
+  let ads = null;
+  let adsStarted = false;
+  let adBreak = false;
+  let hold = null;
+  let adsFailed = false;
+  let resuming = false;
 
   const node = (tag, css, parent) => {
     const element = doc.createElement(tag);
@@ -123,6 +129,9 @@ function mount(target, config = {}, bridge = false) {
   host.replaceChildren(stage);
 
   const video = node('video', 'video', stage);
+  const plan = !demo && config.preview !== true && config.ads?.plan && typeof config.ads.plan === 'object' &&
+    !Array.isArray(config.ads.plan) ? config.ads.plan : null;
+  const adContainer = plan ? node('div', 'ad-container', stage) : null;
   video.playsInline = true;
   video.preload = 'metadata';
   video.loop = embed.playback.loop;
@@ -206,6 +215,7 @@ function mount(target, config = {}, bridge = false) {
   const viewerUI = createViewerUI({
     stage, video, view, metadata, emptyActions: config.preview === true && !demo,
     node, button, shape, bind, seek, timeLabel: readableTime, onOpen: closeMenu,
+    adPlaying: () => adBreak,
   });
 
   function menu(key, glyph) {
@@ -340,7 +350,7 @@ function mount(target, config = {}, bridge = false) {
 
   function seek(value, internal = false) {
     const bounds = playbackRange(video);
-    if (!bounds || linear || (!embed.playback.allow_seeking && !internal) || !Number.isFinite(value)) return;
+    if (!bounds || linear || adBreak || (!embed.playback.allow_seeking && !internal) || !Number.isFinite(value)) return;
     video.currentTime = Math.min(bounds[1], Math.max(bounds[0], value));
     refresh();
   }
@@ -397,14 +407,14 @@ function mount(target, config = {}, bridge = false) {
     }
     const flags = embed.controls;
     play.hidden = flags.play === 'center' || flags.play === 'hidden';
-    center.hidden = flags.play === 'bar' || flags.play === 'hidden' || (!media.paused && !media.ended);
+    center.hidden = flags.play === 'bar' || flags.play === 'hidden' || !!hold || adBreak || resuming || (!media.paused && !media.ended);
     video.dataset.clickPlay = String(flags.play !== 'hidden');
     timeline.hidden = time.hidden = !flags.progress;
     volumeGroup.hidden = !flags.volume;
     fullscreen.hidden = !flags.fullscreen;
     refreshToolbarVisibility();
     const bounds = playbackRange(media);
-    progress.disabled = !!linear || !embed.playback.allow_seeking || !bounds;
+    progress.disabled = !!linear || adBreak || !embed.playback.allow_seeking || !bounds;
     progress.min = String(bounds?.[0] ?? 0);
     progress.max = String(bounds?.[1] ?? 1);
     progress.value = String(media.currentTime);
@@ -446,13 +456,15 @@ function mount(target, config = {}, bridge = false) {
   }
 
   function toggle() {
-    if (embed.controls.play === 'hidden') return;
+    if (embed.controls.play === 'hidden' || adBreak || hold) return;
     const media = linear?.video ?? video;
+    const play = () => playMedia(media).catch(playError => {
+      if (!disposed && playError.name !== 'AbortError') fail('playError');
+      throw playError;
+    });
     if (!media.paused) media.pause();
     else if (demo && config.adapter === 'vast' && !linearSeen) startLinear(true);
-    else void playMedia(media).catch(playError => {
-      if (!disposed && playError.name !== 'AbortError') fail('playError');
-    });
+    else if (!startAds(play)) play().catch(() => {});
   }
 
   function startLinear(resume) {
@@ -512,9 +524,88 @@ function mount(target, config = {}, bridge = false) {
     });
   }
 
+  // The first play starts the ads; with a pre-roll it holds the content until the break starts,
+  // IMA gives up, or 4 seconds pass, because the module skips a pre-roll once content is past 1 s.
+  function startAds(play) {
+    if (!plan || adsStarted) return false;
+    adsStarted = true;
+    ads?.start();
+    const cuts = ads ? ads.cuts : Array.isArray(plan.cuts) ? plan.cuts : [];
+    if (adsFailed || !cuts.some(cut => cut?.at === 0)) return false;
+    hold = { play, timer: view.setTimeout(releaseHold, 4000) };
+    refresh();
+    return true;
+  }
+
+  function endHold() {
+    if (!hold) return null;
+    view.clearTimeout(hold.timer);
+    const { play } = hold;
+    hold = null;
+    refresh();
+    return play;
+  }
+
+  function releaseHold() {
+    if (!hold || disposed) return void endHold();
+    resuming = true;
+    resume(endHold());
+  }
+
+  // The player asked the content to play: the centre button stays hidden until it plays or the attempt fails.
+  function resume(start) {
+    resuming = true;
+    refresh();
+    start().catch(() => {
+      resuming = false;
+      refresh();
+    });
+  }
+
+  function setAdBreak(active) {
+    if (disposed || adBreak === active) return;
+    adBreak = active;
+    stage.classList.toggle('il-player--ad-break', active);
+    if (active) {
+      closeMenu();
+      viewerUI.close();
+    }
+    refresh();
+  }
+
+  async function attachRealAds() {
+    try {
+      const { attachAds } = await import('@interactivelayers/player-sdk/ads');
+      if (disposed) return;
+      ads = attachAds({
+        session: sdk, video, stage, plan, linear: 'ima', adContainer,
+        onEvent: event => {
+          if (event?.type === 'break_start') {
+            endHold();
+            setAdBreak(true);
+          } else if (event?.type === 'break_end' || event?.type === 'break_error') {
+            // A break error before the first play means IMA gave up: that play is not held.
+            if (event.type === 'break_error' && !adBreak) adsFailed = true;
+            const resumes = adBreak;
+            if (resumes) resuming = true;
+            setAdBreak(false);
+            if (resumes) resume(() => playMedia(video));
+            if (event.type === 'break_error') releaseHold();
+          }
+        },
+      });
+      if (adsStarted) ads.start();
+    } catch {
+      adsFailed = true;
+      setAdBreak(false);
+      releaseHold();
+    }
+  }
+
   function autoplay() {
+    const play = () => playMedia(video);
     if (demo && config.adapter === 'vast' && !linearSeen) startLinear(true);
-    else if (video.paused && !linear) void playMedia(video).catch(() => {});
+    else if (video.paused && !linear && !hold && !startAds(play)) play().catch(() => {});
   }
 
   function updateAppearance(patch = {}) {
@@ -573,9 +664,9 @@ function mount(target, config = {}, bridge = false) {
     onChoices: refreshPlaybackOptions,
     preferNative: !restricted && (embed.controls.airplay || embed.controls.cast) &&
       typeof video.webkitShowPlaybackTargetPicker === 'function',
-    onManifest: !demo && !sdkEvents ? text => sdk?.updateManifest(text) : undefined,
+    onManifest: !demo && !sdkEvents && !plan ? text => sdk?.updateManifest(text) : undefined,
   });
-  const sdk = demo || sdkEvents || hls ? attachHtmlVideo({
+  const sdk = plan ? attachHtmlVideo({ video, stage, timeline: 'media' }) : demo || sdkEvents || hls ? attachHtmlVideo({
     video, stage,
     programTime: demo ? () => demoClock(video) : () => source.programTime(programOrigin),
     ...(demo ? {
@@ -584,10 +675,16 @@ function mount(target, config = {}, bridge = false) {
     } : sdkEvents ? { eventsUrl, sessionId } : {}),
   }) : null;
 
+  if (plan) void attachRealAds();
   for (const event of mediaEvents) bind(video, event, refresh);
   bind(video, 'loadedmetadata', () => {
     viewerUI.restoreBookmark();
     rebuildMenus();
+  });
+  for (const event of ['play', 'playing']) bind(video, event, () => {
+    if (!resuming) return;
+    resuming = false;
+    refresh();
   });
   bind(video, 'error', () => fail('loadError'));
   bind(video, 'playing', () => {
@@ -638,6 +735,8 @@ function mount(target, config = {}, bridge = false) {
       lifecycle.abort();
       viewerUI.destroy();
       options.destroy();
+      endHold();
+      ads?.destroy();
       sdk?.destroy();
       video.pause();
       if (linear) releaseLinear();

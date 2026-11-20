@@ -19,6 +19,7 @@ For a release, copy the build to an immutable versioned directory and preserve i
 | Build output | Purpose |
 | --- | --- |
 | `dist/native-il-player.js` | Self-contained ES module with the player, SDK adapter, and HLS engine |
+| `dist/ads-*.js` | Ads module, loaded from the same directory only when the configuration has an ad plan |
 | `dist/native-il-player.css` | Player and SDK styles |
 | `dist/demo/` | Original program, poster, Super and L artwork, and the four-second linear ad |
 | `dist/THIRD-PARTY-NOTICES.md` and `dist/licenses/` | Dependency notices and license text |
@@ -31,7 +32,7 @@ Allow CORS for ES modules served from a different origin. HLS manifests, renditi
 Load the stylesheet, add the host and configuration, and load the ES module. Give the host the desired width. The player takes its height from the 16:9 aspect ratio.
 
 ```html
-<link rel="stylesheet" href="/player/v0.2.0/native-il-player.css">
+<link rel="stylesheet" href="/player/v0.3.0/native-il-player.css">
 <div id="il-player"></div>
 <script type="application/json" id="il-player-config">
 {
@@ -49,13 +50,13 @@ Load the stylesheet, add the host and configuration, and load the ES module. Giv
   "chapters": [{ "time": 0, "title": "Introduction" }, { "time": 30, "title": "Interview" }]
 }
 </script>
-<script type="module" src="/player/v0.2.0/native-il-player.js"></script>
+<script type="module" src="/player/v0.3.0/native-il-player.js"></script>
 ```
 
 When generating the JSON block in HTML, escape `<` as `\u003c`. With an ES module import you can mount into any element, update appearance, and release playback when your view unmounts.
 
 ```js
-import { mountILPlayer } from '/player/v0.2.0/native-il-player.js';
+import { mountILPlayer } from '/player/v0.3.0/native-il-player.js';
 
 const player = mountILPlayer('#video-host', {
   src: 'https://media.example.com/series/episode.mp4',
@@ -111,7 +112,17 @@ Provide the viewer's playback session values from your backend.
 
 The SDK uses UTC program time in milliseconds for cue timing. HLS uses the rendition's `EXT-X-PROGRAM-DATE-TIME` via HLS.js or the native HLS clock. For an MP4 connected to a synchronous session feed, supply the UTC instant corresponding to media time zero as `programDateTime`, for example `2026-01-01T12:00:00Z`. When the player has no UTC clock, playback continues without timed overlays. HLS.js can also pass in-band InteractiveLayers `EXT-X-DATERANGE` cues to the adapter when there is no session feed. In browsers using native HLS, use the session feed.
 
-The player bundles the SDK's `attachHtmlVideo` adapter from a pinned release revision. [InteractiveLayers Player SDK revision](https://github.com/InteractiveLayerscom/IL-VideoPlayers-SDK/tree/48677cd1c6929c3cb95f7e7f3140f900d1ba23b4).
+The player bundles the SDK's `attachHtmlVideo` adapter from a pinned release revision. [InteractiveLayers Player SDK revision](https://github.com/InteractiveLayerscom/IL-VideoPlayers-SDK/tree/9276d68380db2f615871283607925080200c23dd).
+
+### Real ads from an ad plan
+
+The backend can add an ad plan to the configuration as `ads.plan`. With a plan, the player loads the SDK's ads module from `dist/ads-*.js` next to `native-il-player.js` and serves real ads from Google Ad Manager: Super and L scene graphics in the plan's windows, the 300×250 display overlay, and the plan's video breaks through Google IMA. Scene timing follows the media time of the video. IMA starts with the viewer's first play gesture. During a break the content pauses, seeking and the play controls are locked, and the saved resume position is not updated; the player restores them when the break ends or fails.
+
+An invalid or expired plan shows no ads. An ad that fails to load, an IMA error, or a blocked Google script never stops content playback. Without `ads.plan`, the player requests no ads module and no Google script.
+
+The embedding page's Content-Security-Policy must allow Google's ad hosts (`imasdk.googleapis.com`, `securepubads.g.doubleclick.net`, `pubads.g.doubleclick.net` and the creative hosts they use). The Interactive Layers backend sets this policy on the embed page it builds.
+
+The console preview simulator is independent of the plan: with `demo: true` or `preview: true`, the player ignores `ads.plan` and never contacts Google.
 
 ### Console preview
 
