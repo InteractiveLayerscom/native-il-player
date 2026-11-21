@@ -28,6 +28,25 @@ function serve(path, req, res) {
   }
 }
 
+// The Content-Security-Policy of the page the Console hosts (`_player_page` in backend/api/workspace_il_player.py),
+// with the player's files on the page's own origin, so a style or request the hosted page blocks fails here too.
+// Applied to pages with an ad plan only: without a plan the hosted policy has no `blob:` in media-src, which
+// blocks HLS through Media Source (reported to the Console; the plan-less tests keep their current server).
+const googleScripts = ['https://imasdk.googleapis.com', 'https://securepubads.g.doubleclick.net',
+  'https://pagead2.googlesyndication.com', 'https://tpc.googlesyndication.com'];
+function hostedPolicy(config) {
+  const ads = config?.ads && typeof config.ads === 'object' && 'plan' in config.ads;
+  if (!ads) return null;
+  const scripts = ' ' + googleScripts.join(' ');
+  return [
+    "default-src 'none'", "base-uri 'none'", "form-action 'none'", "object-src 'none'",
+    "frame-ancestors 'self' https://publisher.test",
+    `script-src 'self' 'nonce-test'${scripts}`, "style-src 'self' 'nonce-test'",
+    "media-src 'self' https: blob:", "img-src 'self' data: https:", "connect-src 'self' https:",
+    'frame-src https:', "style-src-attr 'unsafe-inline'",
+  ].join('; ');
+}
+
 createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/embed') {
@@ -36,7 +55,8 @@ createServer((req, res) => {
     const html = '<!doctype html><meta charset=utf-8><link rel=stylesheet href=/native-il-player.css>' +
       '<div id=il-player></div><script id=il-player-config type=application/json>' + json +
       '</script><script type=module src=/native-il-player.js></script>';
-    return res.writeHead(200, { 'Content-Type': types['.html'] }).end(html);
+    const policy = hostedPolicy(config);
+    return res.writeHead(200, { 'Content-Type': types['.html'], ...(policy ? { 'Content-Security-Policy': policy } : {}) }).end(html);
   }
   if (url.pathname === '/host') {
     return res.writeHead(200, { 'Content-Type': types['.html'] }).end('<!doctype html><body></body>');
