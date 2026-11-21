@@ -525,14 +525,18 @@ function mount(target, config = {}, bridge = false) {
   }
 
   // The first play starts the ads; with a pre-roll it holds the content until the break starts,
-  // IMA gives up, or 4 seconds pass, because the module skips a pre-roll once content is past 1 s.
+  // IMA gives up, or 4 seconds per request pass (8 s at most, plus 0.5 s so the module settles a
+  // list of several requests first), because the module skips a pre-roll once content is past 1 s.
   function startAds(play) {
     if (!plan || adsStarted) return false;
     adsStarted = true;
     ads?.start();
     const cuts = ads ? ads.cuts : Array.isArray(plan.cuts) ? plan.cuts : [];
-    if (adsFailed || !cuts.some(cut => cut?.at === 0)) return false;
-    hold = { play, timer: view.setTimeout(releaseHold, 4000) };
+    const preroll = cuts.find(cut => cut?.at === 0);
+    if (adsFailed || !preroll) return false;
+    const requests = Array.isArray(preroll.requests) && preroll.requests.length ? preroll.requests.length : 1;
+    const wait = Math.min(4000 * requests, 8000) + (requests > 1 ? 500 : 0);
+    hold = { play, timer: view.setTimeout(releaseHold, wait) };
     refresh();
     return true;
   }
@@ -591,6 +595,11 @@ function mount(target, config = {}, bridge = false) {
             setAdBreak(false);
             if (resumes) resume(() => playMedia(video));
             if (event.type === 'break_error') releaseHold();
+          } else if (event?.type === 'resume_blocked') {
+            // The browser refused the module's own resume: the viewer starts the content.
+            endHold();
+            resuming = false;
+            refresh();
           }
         },
       });
