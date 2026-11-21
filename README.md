@@ -32,7 +32,7 @@ Allow CORS for ES modules served from a different origin. HLS manifests, renditi
 Load the stylesheet, add the host and configuration, and load the ES module. Give the host the desired width. The player takes its height from the 16:9 aspect ratio.
 
 ```html
-<link rel="stylesheet" href="/player/v0.3.0/native-il-player.css">
+<link rel="stylesheet" href="/player/v0.4.0/native-il-player.css">
 <div id="il-player"></div>
 <script type="application/json" id="il-player-config">
 {
@@ -50,13 +50,13 @@ Load the stylesheet, add the host and configuration, and load the ES module. Giv
   "chapters": [{ "time": 0, "title": "Introduction" }, { "time": 30, "title": "Interview" }]
 }
 </script>
-<script type="module" src="/player/v0.3.0/native-il-player.js"></script>
+<script type="module" src="/player/v0.4.0/native-il-player.js"></script>
 ```
 
 When generating the JSON block in HTML, escape `<` as `\u003c`. With an ES module import you can mount into any element, update appearance, and release playback when your view unmounts.
 
 ```js
-import { mountILPlayer } from '/player/v0.3.0/native-il-player.js';
+import { mountILPlayer } from '/player/v0.4.0/native-il-player.js';
 
 const player = mountILPlayer('#video-host', {
   src: 'https://media.example.com/series/episode.mp4',
@@ -112,7 +112,7 @@ Provide the viewer's playback session values from your backend.
 
 The SDK uses UTC program time in milliseconds for cue timing. HLS uses the rendition's `EXT-X-PROGRAM-DATE-TIME` via HLS.js or the native HLS clock. For an MP4 connected to a synchronous session feed, supply the UTC instant corresponding to media time zero as `programDateTime`, for example `2026-01-01T12:00:00Z`. When the player has no UTC clock, playback continues without timed overlays. HLS.js can also pass in-band InteractiveLayers `EXT-X-DATERANGE` cues to the adapter when there is no session feed. In browsers using native HLS, use the session feed.
 
-The player bundles the SDK's `attachHtmlVideo` adapter from a pinned release revision. [InteractiveLayers Player SDK revision](https://github.com/InteractiveLayerscom/IL-VideoPlayers-SDK/tree/9276d68380db2f615871283607925080200c23dd).
+The player bundles the SDK's `attachHtmlVideo` adapter from a pinned release revision. [InteractiveLayers Player SDK revision](https://github.com/InteractiveLayerscom/IL-VideoPlayers-SDK/tree/3bf25c7128dfa23fa5f6bf2bbc9271fff019a113).
 
 ### Real ads from an ad plan
 
