@@ -405,3 +405,44 @@
     font-size: 10px;
   }
 }
+
+/* The SDK's product card sits above the control bar and over the centre button, so both stay reachable. */
+.il-player > .il-commerce {
+  z-index: 5;
+  right: 10px;
+  bottom: 60px;
+  max-width: calc(100% - 20px);
+  font-size: clamp(12px, 1.9cqw, 18px);
+}
+
+.il-player > .il-commerce--open {
+  top: auto;
+  bottom: 60px;
+  max-height: calc(100% - 72px);
+}
+
+@container (max-width: 500px) {
+  .il-player > .il-commerce,
+  .il-player > .il-commerce--open {
+    right: 5px;
+    bottom: 48px;
+  }
+
+  .il-player > .il-commerce--open {
+    max-height: calc(100% - 56px);
+  }
+}
+
+/* A small embed gives the open card the whole picture above the controls; it scrolls inside. */
+@container (max-width: 380px) {
+  .il-player > .il-commerce--open {
+    inset: 5px 5px 48px;
+    width: auto;
+    max-width: none;
+    max-height: none;
+  }
+}
+
+.il-player--ad-break > .il-commerce {
+  display: none;
+}

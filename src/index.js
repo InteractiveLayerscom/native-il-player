@@ -675,7 +675,10 @@ function mount(target, config = {}, bridge = false) {
       typeof video.webkitShowPlaybackTargetPicker === 'function',
     onManifest: !demo && !sdkEvents && !plan ? text => sdk?.updateManifest(text) : undefined,
   });
-  const sdk = plan ? attachHtmlVideo({ video, stage, timeline: 'media' }) : demo || sdkEvents || hls ? attachHtmlVideo({
+  // A plan with the scene product turns on the SDK's product card, in the player's own language (read when the
+  // card opens, so an appearance update applies). Without `commerce` the session is exactly as before.
+  const commerce = plan?.commerce && typeof plan.commerce === 'object' ? { get locale() { return locale; } } : null;
+  const sdk = plan ? attachHtmlVideo({ video, stage, timeline: 'media', ...(commerce ? { commerce } : {}) }) : demo || sdkEvents || hls ? attachHtmlVideo({
     video, stage,
     programTime: demo ? () => demoClock(video) : () => source.programTime(programOrigin),
     ...(demo ? {
