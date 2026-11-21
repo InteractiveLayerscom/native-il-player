@@ -24,30 +24,38 @@ const fakeIma = `(() => {
   };
   const ima = {
     ViewMode: { NORMAL: 'normal' },
-    AdEvent: { Type: { CONTENT_PAUSE_REQUESTED: 'pause', CONTENT_RESUME_REQUESTED: 'resume', ALL_ADS_COMPLETED: 'done' } },
+    AdEvent: { Type: { CONTENT_PAUSE_REQUESTED: 'pause', CONTENT_RESUME_REQUESTED: 'resume', ALL_ADS_COMPLETED: 'done', STARTED: 'started' } },
     AdErrorEvent: { Type: { AD_ERROR: 'error' } },
     AdsManagerLoadedEvent: { Type: { ADS_MANAGER_LOADED: 'loaded' } },
     AdDisplayContainer: class { initialize() { log.initialized++; } destroy() {} },
     AdsRequest: class {},
     AdsLoader: class {
       constructor() { Object.assign(this, listeners()); }
-      requestAds(request) {
-        log.requests.push({ adsResponse: request.adsResponse, pageUrl: request.pageUrl });
+      // window.imaHosts maps the host of a request's adTagUrl to { answer: 'empty' | 'fill' | 'silent', delay }.
+      requestAds(request, context) {
+        const host = request.adTagUrl ? new URL(request.adTagUrl).hostname : null;
+        log.requests.push({ adsResponse: request.adsResponse, adTagUrl: request.adTagUrl, host, pageUrl: request.pageUrl, at: Date.now() });
+        const plan = host && window.imaHosts?.[host];
+        const mode = plan ? plan.answer : window.imaMode;
+        const userContext = () => context;
         setTimeout(() => {
-          if (window.imaMode === 'error') return this.fire('error', { getError: () => ({}) });
-          if (window.imaMode === 'silent') return;
+          if (mode === 'error' || mode === 'empty') return this.fire('error', { getError: () => ({}), getUserRequestContext: userContext });
+          if (mode === 'silent') return;
           const manager = Object.assign(listeners(), {
             init() {},
             resize() {},
             destroy() {},
             start() {
               log.started++;
-              setTimeout(() => manager.fire('pause', {}), window.imaPauseDelay ?? 50);
+              setTimeout(() => {
+                manager.fire('pause', {});
+                manager.fire('started', {});
+              }, window.imaPauseDelay ?? 50);
               window.endBreak = () => manager.fire('resume', {});
             },
           });
-          this.fire('loaded', { getAdsManager: () => manager });
-        }, 0);
+          this.fire('loaded', { getAdsManager: () => manager, getUserRequestContext: userContext });
+        }, plan?.delay ?? 0);
       }
       contentComplete() {}
       destroy() {}
@@ -352,4 +360,95 @@ test('shows the centre play button when the content cannot resume after a break'
   await expect(page.locator('.il-player--ad-break')).toHaveCount(0);
   await expect(page.locator('.il-player__center')).toBeVisible();
   await expect(video).toHaveJSProperty('paused', true);
+});
+
+const iadTag = 'https://ads.iadserver.com/gampad/ads?tag=ad_tags_1&output=vast&vid=asset-1&cue_seconds=0';
+const gamTag = 'https://pubads.g.doubleclick.net/gampad/ads?iu=/123/site/video';
+const orderedCuts = [{
+  id: 'pre', at: 0, position: 'preroll', contextual: false,
+  requests: [{ provider: 'iadserver', tag_url: iadTag }, { provider: 'gam', tag_url: gamTag }],
+}];
+
+// Records every moment the centre button is shown before the content's first playing event.
+async function watchCenterUntilPlaying(page) {
+  await page.evaluate(() => {
+    const center = document.querySelector('.il-player__center');
+    const content = document.querySelector('video');
+    window.centerShown = [];
+    window.playingAt = null;
+    const sample = () => {
+      if (window.playingAt) return;
+      if (!center.hidden) window.centerShown.push(Date.now());
+      requestAnimationFrame(sample);
+    };
+    content.addEventListener('playing', () => { window.playingAt = Date.now(); }, { once: true });
+    sample();
+  });
+}
+
+async function startOrdered(page, hosts) {
+  await stubGoogle(page);
+  await page.addInitScript(answers => { window.imaHosts = answers; }, hosts);
+  await page.goto(embed({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan({ cuts: orderedCuts }) } }));
+  const video = page.locator('video');
+  await expect(video).toHaveJSProperty('readyState', 4);
+  await expect.poll(() => page.evaluate(() => !!window.google?.ima)).toBe(true);
+  await page.locator('.il-player__center').click();
+  const clicked = Date.now();
+  await watchCenterUntilPlaying(page);
+  return { video, clicked };
+}
+
+test('asks the pre-roll requests in order and holds the content until the break ends', async ({ page }) => {
+  const { video } = await startOrdered(page, {
+    'ads.iadserver.com': { answer: 'empty', delay: 400 },
+    'pubads.g.doubleclick.net': { answer: 'fill', delay: 400 },
+  });
+  await expect(page.locator('.il-player--ad-break')).toHaveCount(1);
+  expect(await video.evaluate(element => element.currentTime)).toBe(0);
+  const hosts = await page.evaluate(() => window.imaLog.requests.map(request => request.host));
+  expect(hosts).toEqual(['ads.iadserver.com', 'pubads.g.doubleclick.net']);
+  await page.waitForTimeout(500);
+  expect(await video.evaluate(element => element.currentTime)).toBe(0);
+  await expect(video).toHaveJSProperty('paused', true);
+  await page.evaluate(() => window.endBreak());
+  await expect(page.locator('.il-player--ad-break')).toHaveCount(0);
+  await expect.poll(() => video.evaluate(element => element.currentTime)).toBeGreaterThan(0.3);
+  expect(await page.evaluate(() => window.centerShown)).toEqual([]);
+});
+
+test('starts the content right after the last request comes back empty', async ({ page }) => {
+  const { video, clicked } = await startOrdered(page, {
+    'ads.iadserver.com': { answer: 'empty', delay: 400 },
+    'pubads.g.doubleclick.net': { answer: 'empty', delay: 400 },
+  });
+  await expect(video).toHaveJSProperty('paused', false, { timeout: 3000 });
+  const waited = Date.now() - clicked;
+  expect(waited).toBeGreaterThan(700);
+  expect(waited).toBeLessThan(3000);
+  const hosts = await page.evaluate(() => window.imaLog.requests.map(request => request.host));
+  expect(hosts).toEqual(['ads.iadserver.com', 'pubads.g.doubleclick.net']);
+  await expect.poll(() => video.evaluate(element => element.currentTime)).toBeGreaterThan(0.5);
+  await expect(page.locator('.il-player--ad-break')).toHaveCount(0);
+  await expect(page.locator('.il-player__center')).toBeHidden();
+  expect(await page.evaluate(() => window.centerShown)).toEqual([]);
+  await expect(video).toHaveJSProperty('paused', false);
+});
+
+test('starts the content between 8 and 10 seconds when no ad server answers', async ({ page }) => {
+  test.setTimeout(30000);
+  const { video, clicked } = await startOrdered(page, {
+    'ads.iadserver.com': { answer: 'silent' },
+    'pubads.g.doubleclick.net': { answer: 'silent' },
+  });
+  await page.waitForTimeout(7000);
+  expect(await video.evaluate(element => element.currentTime)).toBe(0);
+  await expect(page.locator('.il-player__center')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => window.playingAt), { timeout: 5000 }).not.toBeNull();
+  const waited = await page.evaluate(() => window.playingAt) - clicked;
+  expect(waited).toBeGreaterThan(8000);
+  expect(waited).toBeLessThan(10000);
+  expect(await page.evaluate(() => window.centerShown)).toEqual([]);
+  await expect.poll(() => video.evaluate(element => element.currentTime), { timeout: 6000 }).toBeGreaterThan(1);
+  await expect(page.locator('.il-player__center')).toBeHidden();
 });
