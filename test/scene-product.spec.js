@@ -219,3 +219,22 @@ test('after Continue to Shopify the video stays paused', async ({ page, context 
   await page.waitForTimeout(500);
   expect(await paused(page)).toBe(true);
 });
+
+test('with a light brand the open card\'s title and price read at 4.5:1 on its real background', async ({ page, context }) => {
+  const branded = { ...card, brand: { accent: '#aa2200', background: '#ffffff' } };
+  await serve(context, { answer: () => ({ status: 200, body: branded }) });
+  await page.goto(origin + embedPath({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan() } }));
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await page.getByRole('button', { name: 'View product' }).click();
+  const ratios = await page.evaluate(() => {
+    const rgb = (value) => value.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number);
+    const lum = ([r, g, b]) => [r, g, b].map((v) => v / 255)
+      .map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+      .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+    const surface = rgb(getComputedStyle(document.querySelector('.il-commerce-panel')).backgroundColor);
+    return Object.fromEntries(['.il-commerce-title', '.il-commerce-price', '.il-commerce-caption', '.il-commerce-header span']
+      .map((selector) => [selector, ratio(rgb(getComputedStyle(document.querySelector(selector)).color), surface)]));
+  });
+  for (const [selector, value] of Object.entries(ratios)) expect(value, selector).toBeGreaterThanOrEqual(4.5);
+});
