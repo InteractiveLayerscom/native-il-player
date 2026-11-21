@@ -155,3 +155,67 @@ test('in a 320x180 embed the open card fits above the control bar and Buy is rea
   await buy.click();
   await expect(page.getByRole('link', { name: 'Continue to Shopify' })).toBeAttached();
 });
+
+// At the pace of a person: pauses, an open product, a scene that ends while choosing.
+async function cardShown(page, context) {
+  const seen = await serve(context);
+  await page.goto(origin + embedPath({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan() } }));
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await expect(page.getByRole('button', { name: 'View product' })).toBeVisible();
+  return seen;
+}
+const paused = (page) => page.locator('video').evaluate((video) => video.paused);
+const position = (page) => page.locator('video').evaluate((video) => video.currentTime);
+
+test('pausing with the card closed keeps it, for as long as the viewer looks', async ({ page, context }) => {
+  const seen = await cardShown(page, context);
+  await page.locator('.il-player__toolbar').getByRole('button', { name: 'Pause', exact: true }).click();
+  await page.waitForTimeout(2500);
+  await expect(page.getByRole('button', { name: 'View product' })).toBeVisible();
+  await page.locator('.il-player__toolbar').getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'View product' })).toBeVisible();
+  expect(seen.impressions).toBe(1);
+});
+
+test('opening the product pauses the video, hides the centre button, and closing resumes it', async ({ page, context }) => {
+  await cardShown(page, context);
+  await page.getByRole('button', { name: 'View product' }).click();
+  await expect.poll(() => paused(page)).toBe(true);
+  await expect(page.locator('.il-player__center')).toBeHidden();
+  const at = await position(page);
+  await page.waitForTimeout(2000);
+  expect(await position(page)).toBe(at);
+  await expect(page.getByRole('button', { name: 'Buy' })).toBeVisible();
+  // Space on a button of the card chooses it; it does not toggle the video.
+  await page.getByRole('button', { name: 'Black / M' }).focus();
+  await page.keyboard.press(' ');
+  expect(await paused(page)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Buy' })).toBeHidden();
+  await expect.poll(() => paused(page)).toBe(false);
+});
+
+test('a viewer who plays with the product open keeps it open past the scene, and closing it then removes it', async ({ page, context }) => {
+  await cardShown(page, context);
+  await page.getByRole('button', { name: 'View product' }).click();
+  await expect.poll(() => paused(page)).toBe(true);
+  await page.locator('.il-player__toolbar').getByRole('button', { name: 'Play', exact: true }).click();
+  await expect.poll(() => position(page), { timeout: 15000 }).toBeGreaterThan(9);
+  await expect(page.getByRole('button', { name: 'Buy' })).toBeVisible();
+  await page.getByRole('button', { name: 'Close' }).click();
+  await expect(page.locator('.il-commerce')).toHaveCount(0);
+  expect(await paused(page)).toBe(false);
+});
+
+test('after Continue to Shopify the video stays paused', async ({ page, context }) => {
+  await cardShown(page, context);
+  await page.getByRole('button', { name: 'View product' }).click();
+  await page.getByRole('button', { name: 'Buy' }).click();
+  const link = page.getByRole('link', { name: 'Continue to Shopify' });
+  const [checkout] = await Promise.all([context.waitForEvent('page'), link.click()]);
+  await expect(checkout).toHaveURL('https://shop.test/checkout');
+  await page.bringToFront();
+  await page.getByRole('button', { name: 'Close' }).click();
+  await page.waitForTimeout(500);
+  expect(await paused(page)).toBe(true);
+});

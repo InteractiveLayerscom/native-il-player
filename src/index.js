@@ -676,8 +676,10 @@ function mount(target, config = {}, bridge = false) {
     onManifest: !demo && !sdkEvents && !plan ? text => sdk?.updateManifest(text) : undefined,
   });
   // A plan with the scene product turns on the SDK's product card, in the player's own language (read when the
-  // card opens, so an appearance update applies). Without `commerce` the session is exactly as before.
-  const commerce = plan?.commerce && typeof plan.commerce === 'object' ? { get locale() { return locale; } } : null;
+  // card opens, so an appearance update applies). Opening the product pauses the video, so no break starts while
+  // the viewer chooses. Without `commerce` the session is exactly as before.
+  const commerce = plan?.commerce && typeof plan.commerce === 'object'
+    ? { get locale() { return locale; }, pauseOnOpen: true } : null;
   const sdk = plan ? attachHtmlVideo({ video, stage, timeline: 'media', ...(commerce ? { commerce } : {}) }) : demo || sdkEvents || hls ? attachHtmlVideo({
     video, stage,
     programTime: demo ? () => demoClock(video) : () => source.programTime(programOrigin),

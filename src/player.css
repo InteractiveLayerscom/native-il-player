@@ -446,3 +446,9 @@
 .il-player--ad-break > .il-commerce {
   display: none;
 }
+
+/* While the viewer looks at a product the video is paused under it: the centre play button would sit behind
+   the card, so it steps aside; the control bar's play button stays. */
+.il-player:has(> .il-commerce--open) > .il-player__center {
+  visibility: hidden;
+}
