@@ -332,3 +332,35 @@ for (const [width, height] of [[360, 202], [320, 180]]) {
     await expect(frame.locator('.il-commerce-variants button').first()).toBeFocused();
   });
 }
+
+
+const openProduct = async (page, context, commerce, size = [320, 180]) => {
+  await serve(context, { answer: () => ({ status: 200, body: { ...card, commerce: { ...card.commerce, ...commerce } } }),
+    frame: size, embedded: embeddedConfig });
+  await page.goto('https://publisher.test/page');
+  const frame = page.frameLocator('#player');
+  await frame.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await frame.getByRole('button', { name: 'View product' }).click();
+  await expect(frame.locator('.il-commerce-panel')).toBeVisible();
+  return frame;
+};
+
+test('with every variant sold out, focus is on Close and Escape closes the product', async ({ page, context }) => {
+  // At a size where the variant is in view, so only its being disabled sends focus to Close.
+  const frame = await openProduct(page, context, { variants: card.commerce.variants.map((v) => ({ ...v, availableForSale: false })) }, [640, 360]);
+  await expect(frame.locator('.il-commerce-close')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(frame.locator('.il-commerce-panel')).toBeHidden();
+});
+
+test('a chosen variant late in a long row is scrolled into view sideways', async ({ page, context }) => {
+  const variants = Array.from({ length: 10 }, (_, i) => ({ id: 'v' + i, label: 'Variante larga ' + i, price: '100.00', availableForSale: i === 8 }));
+  const frame = await openProduct(page, context, { variants });
+  const inRow = await frame.locator('.il-commerce-variants').evaluate((row) => {
+    const chosen = row.querySelector('[aria-pressed="true"]').getBoundingClientRect();
+    const view = row.getBoundingClientRect();
+    return { label: row.querySelector('[aria-pressed="true"]').textContent, scrolled: row.scrollLeft > 0,
+      inside: chosen.left >= view.left - 0.5 && chosen.right <= view.right + 0.5 };
+  });
+  expect(inRow).toEqual({ label: 'Variante larga 8', scrolled: true, inside: true });
+});
