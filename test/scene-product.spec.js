@@ -302,7 +302,9 @@ for (const [width, height] of [[360, 202], [320, 180]]) {
     await expect.poll(() => qr.evaluate((img) => img.complete && img.naturalWidth > 0)).toBe(true);
     await page.waitForTimeout(100);
     expect(await insidePanel(frame, '.il-commerce-result a')).toBe(true);
-    // At a common phone width the QR fits beside it too; at 320 it shows as far as it fits.
-    if (width >= 360) expect(await insidePanel(frame, '.il-commerce-qr')).toBe(true);
+    // The whole QR beside it, at a size a phone camera can read (its caption gives way at this width).
+    expect(await insidePanel(frame, '.il-commerce-qr img')).toBe(true);
+    expect((await qr.boundingBox()).width).toBeGreaterThanOrEqual(84);
+    await expect(qr).toHaveAttribute('alt', 'Escaneá el código con tu celular');
   });
 }

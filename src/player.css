@@ -433,8 +433,8 @@
   }
 }
 
-/* A small embed gives the open card the whole picture above the controls; it scrolls inside. After Buy, a smaller
-   QR beside the link lets both fit at phone sizes. */
+/* A small embed gives the open card the whole picture above the controls; it scrolls inside. After Buy, the QR
+   without its caption fits beside the link at phone sizes. */
 @container (max-width: 380px) {
   .il-player > .il-commerce--open {
     inset: 5px 5px 48px;
@@ -443,8 +443,13 @@
     max-height: none;
   }
 
+  /* The QR stays at a size a phone camera can read; its caption, which costs the height, gives way. */
   .il-player > .il-commerce--done .il-commerce-qr img {
-    width: 64px;
+    width: 84px;
+  }
+
+  .il-player > .il-commerce--done .il-commerce-qr span {
+    display: none;
   }
 }
 
