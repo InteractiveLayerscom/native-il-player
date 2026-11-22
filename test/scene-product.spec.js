@@ -34,7 +34,7 @@ function plan(extra) {
 
 const embedPath = (config) => '/embed?config=' + encodeURIComponent(JSON.stringify(config));
 
-async function serve(context, { answer = () => ({ status: 200, body: card }), embedded = null } = {}) {
+async function serve(context, { answer = () => ({ status: 200, body: card }), embedded = null, frame = [800, 450], handoff = 201 } = {}) {
   const seen = { routes: [], impressions: 0, views: 0, handoffs: [] };
   await context.route(origin + '/**', async (request) => {
     const url = new URL(request.request().url());
@@ -55,6 +55,7 @@ async function serve(context, { answer = () => ({ status: 200, body: card }), em
     if (url.pathname.endsWith('/creativeView')) seen.views++;
     if (url.pathname === '/commerce/offer/dlv_1') {
       seen.handoffs.push(request.request().postData());
+      if (handoff !== 201) return request.fulfill({ status: handoff, headers: cors, contentType: 'application/json', body: '{"error":"offer_unavailable"}' });
       return request.fulfill({ status: 201, headers: cors, contentType: 'application/json',
         body: JSON.stringify({ continueUrl: 'https://shop.test/checkout', qrImageUrl: 'https://ads-images.test/qr.png' }) });
     }
@@ -62,7 +63,7 @@ async function serve(context, { answer = () => ({ status: 200, body: card }), em
   });
   await context.route('https://shop.test/**', (request) => request.fulfill({ contentType: 'text/html', body: '<title>Checkout</title>' }));
   await context.route('https://publisher.test/**', (request) => request.fulfill({ contentType: 'text/html',
-    body: `<!doctype html><iframe id=player sandbox="allow-scripts allow-same-origin" style="width:800px;height:450px;border:0"
+    body: `<!doctype html><iframe id=player sandbox="allow-scripts allow-same-origin" style="width:${frame[0]}px;height:${frame[1]}px;border:0"
       src="${origin}${embedPath(embedded)}"></iframe>` }));
   return seen;
 }
@@ -237,4 +238,46 @@ test('with a light brand the open card\'s title and price read at 4.5:1 on its r
       .map((selector) => [selector, ratio(rgb(getComputedStyle(document.querySelector(selector)).color), surface)]));
   });
   for (const [selector, value] of Object.entries(ratios)) expect(value, selector).toBeGreaterThanOrEqual(4.5);
+});
+
+
+// The QR is the only way to finish from an iframe that cannot open tabs: after Buy it must be fully visible.
+async function insidePanel(frame, selector) {
+  const panel = await frame.locator('.il-commerce-panel').boundingBox();
+  const box = await frame.locator(selector).boundingBox();
+  return box.x >= panel.x - 0.5 && box.y >= panel.y - 0.5 &&
+    box.x + box.width <= panel.x + panel.width + 0.5 && box.y + box.height <= panel.y + panel.height + 0.5;
+}
+const embeddedConfig = { src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan() } };
+
+for (const [width, height] of [[640, 360], [500, 281], [380, 214]]) {
+  test(`at ${width}x${height} in the publisher's iframe, the link and the whole QR are visible after Buy`, async ({ page, context }) => {
+    await serve(context, { embedded: embeddedConfig, frame: [width, height] });
+    await page.goto('https://publisher.test/page');
+    const frame = page.frameLocator('#player');
+    await frame.getByRole('button', { name: 'Play', exact: true }).first().click();
+    await frame.getByRole('button', { name: 'View product' }).click();
+    await frame.getByRole('button', { name: 'Buy' }).click();
+    const link = frame.getByRole('link', { name: 'Continue to Shopify' });
+    await expect(link).toBeFocused();
+    const qr = frame.locator('.il-commerce-qr img');
+    await expect.poll(() => qr.evaluate((img) => img.complete && img.naturalWidth > 0)).toBe(true);
+    expect(await insidePanel(frame, '.il-commerce-result a')).toBe(true);
+    expect(await insidePanel(frame, '.il-commerce-qr')).toBe(true);
+    // The close control: in view at the Console's size; below it, a scroll up or Escape away.
+    if (width >= 640) expect(await insidePanel(frame, '.il-commerce-close')).toBe(true);
+    await link.press('Escape');
+    await expect(frame.getByRole('link', { name: 'Continue to Shopify' })).toHaveCount(0);
+  });
+}
+
+test('at 640x360 an expired offer\'s message is visible without the viewer scrolling', async ({ page, context }) => {
+  await serve(context, { embedded: embeddedConfig, frame: [640, 360], handoff: 404 });
+  await page.goto('https://publisher.test/page');
+  const frame = page.frameLocator('#player');
+  await frame.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await frame.getByRole('button', { name: 'View product' }).click();
+  await frame.getByRole('button', { name: 'Buy' }).click();
+  await expect(frame.locator('.il-commerce-result')).toHaveText('This offer is no longer available.');
+  expect(await insidePanel(frame, '.il-commerce-result')).toBe(true);
 });
