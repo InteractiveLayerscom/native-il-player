@@ -18,7 +18,8 @@ For a release, copy the build to an immutable versioned directory and preserve i
 
 | Build output | Purpose |
 | --- | --- |
-| `dist/native-il-player.js` | Self-contained ES module with the player, SDK adapter, and HLS engine |
+| `dist/native-il-player.js` | ES module with the player, SDK adapter, and HLS engine |
+| `dist/cues-*.js` | SDK code shared by the player and the ads module, imported by `native-il-player.js` from the same directory |
 | `dist/ads-*.js` | Ads module, loaded from the same directory only when the configuration has an ad plan |
 | `dist/native-il-player.css` | Player and SDK styles |
 | `dist/demo/` | Original program, poster, Super and L artwork, and the four-second linear ad |
@@ -32,7 +33,7 @@ Allow CORS for ES modules served from a different origin. HLS manifests, renditi
 Load the stylesheet, add the host and configuration, and load the ES module. Give the host the desired width. The player takes its height from the 16:9 aspect ratio.
 
 ```html
-<link rel="stylesheet" href="/player/v0.4.0/native-il-player.css">
+<link rel="stylesheet" href="/player/v0.5.0/native-il-player.css">
 <div id="il-player"></div>
 <script type="application/json" id="il-player-config">
 {
@@ -50,13 +51,13 @@ Load the stylesheet, add the host and configuration, and load the ES module. Giv
   "chapters": [{ "time": 0, "title": "Introduction" }, { "time": 30, "title": "Interview" }]
 }
 </script>
-<script type="module" src="/player/v0.4.0/native-il-player.js"></script>
+<script type="module" src="/player/v0.5.0/native-il-player.js"></script>
 ```
 
 When generating the JSON block in HTML, escape `<` as `\u003c`. With an ES module import you can mount into any element, update appearance, and release playback when your view unmounts.
 
 ```js
-import { mountILPlayer } from '/player/v0.4.0/native-il-player.js';
+import { mountILPlayer } from '/player/v0.5.0/native-il-player.js';
 
 const player = mountILPlayer('#video-host', {
   src: 'https://media.example.com/series/episode.mp4',
@@ -112,7 +113,7 @@ Provide the viewer's playback session values from your backend.
 
 The SDK uses UTC program time in milliseconds for cue timing. HLS uses the rendition's `EXT-X-PROGRAM-DATE-TIME` via HLS.js or the native HLS clock. For an MP4 connected to a synchronous session feed, supply the UTC instant corresponding to media time zero as `programDateTime`, for example `2026-01-01T12:00:00Z`. When the player has no UTC clock, playback continues without timed overlays. HLS.js can also pass in-band InteractiveLayers `EXT-X-DATERANGE` cues to the adapter when there is no session feed. In browsers using native HLS, use the session feed.
 
-The player bundles the SDK's `attachHtmlVideo` adapter from a pinned release revision. [InteractiveLayers Player SDK revision](https://github.com/InteractiveLayerscom/IL-VideoPlayers-SDK/tree/3bf25c7128dfa23fa5f6bf2bbc9271fff019a113).
+The player bundles the SDK's `attachHtmlVideo` adapter from a pinned release revision. [InteractiveLayers Player SDK revision](https://github.com/InteractiveLayerscom/IL-VideoPlayers-SDK/tree/16dd1322e3df6b6ff5cfc397201902571a2e9077).
 
 ### Real ads from an ad plan
 
@@ -121,6 +122,14 @@ The backend can add an ad plan to the configuration as `ads.plan`. With a plan, 
 An invalid or expired plan shows no ads. An ad that fails to load, an IMA error, or a blocked Google script never stops content playback. Without `ads.plan`, the player requests no ads module and no Google script.
 
 The embedding page's Content-Security-Policy must allow Google's ad hosts (`imasdk.googleapis.com`, `securepubads.g.doubleclick.net`, `pubads.g.doubleclick.net` and the creative hosts they use). The Interactive Layers backend sets this policy on the embed page it builds.
+
+### Product with a Buy button
+
+When the plan has a `commerce` part (the scene product), the player shows the product card during the plan's scenes: a **View product** button above the control bar opens the product, its variants and **Buy**. The player asks the plan's `commerce.url` for each scene a few seconds ahead, adding only the scene and the player's language (`locale`; it follows appearance updates). It shows nothing when the answer is empty. The impression is sent once when the card is visible, the product view once when the viewer opens it, and **Buy** sends the purchase intent and offers **Continue to Shopify**, which opens the store's checkout in a new tab. The card stays while the video is paused. Opening the product pauses the video, so no break starts while the viewer chooses, and the centre play button steps aside; closing it (Close or Escape) resumes playback unless the viewer played or paused meanwhile or already went on to the store, in which case the video stays as it is. An open product outlasts its scene until the viewer closes it. A video break or the end of the video always takes the card away; after a break it comes back closed if its scene is still on. Space on the card's buttons acts on the card, not on the video. In an embed narrower than 380 px the open card uses the whole picture above the controls and scrolls; it was checked down to 320 × 180. Without `commerce` the player behaves exactly as before and asks for no product.
+
+The plan arrives inline in the hosted page, so `commerce.url` must be on that page's origin; a plan whose `commerce.url` points elsewhere shows no product (its other ads still play). The breaks' iADServer requests carry the plan's `commerce.session`, so iADServer counts breaks and products in one session.
+
+Buying from an embed: the player usually runs in an iframe on the publisher's page. **Continue to Shopify** is a link the viewer taps, which popup blockers allow. If the publisher adds a `sandbox` attribute to the iframe, it must include `allow-popups allow-popups-to-escape-sandbox` for that link to open (with `allow-scripts allow-same-origin`, which the player already needs). Inside any iframe the card also shows the purchase QR, so a viewer whose embed blocks new tabs can finish on a phone. The embed page's Content-Security-Policy must allow `connect-src` to its own origin and to `https://ads.iadserver.com`, and `img-src https:` for the product images and the QR. The card's styles ship in `native-il-player.css`; nothing is injected at run time, so a page whose `style-src` allows only its own files and a nonce still shows the card (brand colours are set through the element's style object).
 
 The console preview simulator is independent of the plan: with `demo: true` or `preview: true`, the player ignores `ads.plan` and never contacts Google.
 
