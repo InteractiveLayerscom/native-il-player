@@ -308,3 +308,27 @@ for (const [width, height] of [[360, 202], [320, 180]]) {
     await expect(qr).toHaveAttribute('alt', 'Escaneá el código con tu celular');
   });
 }
+
+
+for (const [width, height] of [[360, 202], [320, 180]]) {
+  test(`at ${width}x${height} the product opens at the top, with the title in view and focus on a visible control`, async ({ page, context }) => {
+    const real = { ...card, brand: { accent: '#aa2200', background: '#ffffff', logoUrl: 'https://ads-images.test/logo.png' },
+      commerce: { ...card.commerce, locale: 'es', title: 'Delantal de cocina de lino lavado con bolsillo frontal' } };
+    await serve(context, { answer: () => ({ status: 200, body: real }), frame: [width, height], embedded: { ...embeddedConfig, locale: 'es' } });
+    await page.goto('https://publisher.test/page');
+    const frame = page.frameLocator('#player');
+    await frame.getByRole('button', { name: 'Reproducir', exact: true }).first().click();
+    await frame.getByRole('button', { name: 'Ver producto' }).click();
+    await expect(frame.locator('.il-commerce-panel')).toBeVisible();
+    expect(await frame.locator('.il-commerce-panel').evaluate((panel) => panel.scrollTop)).toBe(0);
+    expect(await insidePanel(frame, '.il-commerce-title')).toBe(true);
+    const focused = await frame.locator('.il-commerce-panel').evaluate((panel) => {
+      const box = panel.ownerDocument.activeElement.getBoundingClientRect();
+      const view = panel.getBoundingClientRect();
+      return panel.contains(panel.ownerDocument.activeElement) && box.top >= view.top - 0.5 && box.bottom <= view.bottom + 0.5;
+    });
+    expect(focused).toBe(true);
+    await page.keyboard.press('ArrowDown');
+    await expect(frame.locator('.il-commerce-variants button').first()).toBeFocused();
+  });
+}
