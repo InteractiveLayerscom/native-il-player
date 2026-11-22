@@ -12,7 +12,7 @@
     "test": "npm run build && playwright test"
   },
   "dependencies": {
-    "@interactivelayers/player-sdk": "https://codeload.github.com/InteractiveLayerscom/IL-VideoPlayers-SDK/tar.gz/ba5ac824545399171fd31724a8e2e902854d2975",
+    "@interactivelayers/player-sdk": "https://codeload.github.com/InteractiveLayerscom/IL-VideoPlayers-SDK/tar.gz/071e22b962ba788311ce97de28b1bfd3e8858df9",
     "hls.js": "1.7.4"
   },
   "devDependencies": {
