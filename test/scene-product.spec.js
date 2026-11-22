@@ -281,3 +281,28 @@ test('at 640x360 an expired offer\'s message is visible without the viewer scrol
   await expect(frame.locator('.il-commerce-result')).toHaveText('This offer is no longer available.');
   expect(await insidePanel(frame, '.il-commerce-result')).toBe(true);
 });
+
+
+// Phones: the link is the way to buy, so after Buy it is always fully in view and focused; the QR as far as it fits.
+for (const [width, height] of [[360, 202], [320, 180]]) {
+  test(`at ${width}x${height} (a phone) the link is fully in view and focused after Buy`, async ({ page, context }) => {
+    // Like the real card: Spanish, a two-line title and a brand logo.
+    const real = { ...card, brand: { accent: '#aa2200', background: '#ffffff', logoUrl: 'https://ads-images.test/logo.png' },
+      commerce: { ...card.commerce, locale: 'es', title: 'Delantal de cocina de lino lavado con bolsillo frontal' } };
+    await serve(context, { answer: () => ({ status: 200, body: real }), frame: [width, height],
+      embedded: { ...embeddedConfig, locale: 'es' } });
+    await page.goto('https://publisher.test/page');
+    const frame = page.frameLocator('#player');
+    await frame.getByRole('button', { name: 'Reproducir', exact: true }).first().click();
+    await frame.getByRole('button', { name: 'Ver producto' }).click();
+    await frame.getByRole('button', { name: 'Comprar' }).click();
+    const link = frame.getByRole('link', { name: 'Continuar a Shopify' });
+    await expect(link).toBeFocused();
+    const qr = frame.locator('.il-commerce-qr img');
+    await expect.poll(() => qr.evaluate((img) => img.complete && img.naturalWidth > 0)).toBe(true);
+    await page.waitForTimeout(100);
+    expect(await insidePanel(frame, '.il-commerce-result a')).toBe(true);
+    // At a common phone width the QR fits beside it too; at 320 it shows as far as it fits.
+    if (width >= 360) expect(await insidePanel(frame, '.il-commerce-qr')).toBe(true);
+  });
+}

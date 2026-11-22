@@ -433,13 +433,18 @@
   }
 }
 
-/* A small embed gives the open card the whole picture above the controls; it scrolls inside. */
+/* A small embed gives the open card the whole picture above the controls; it scrolls inside. After Buy, a smaller
+   QR beside the link lets both fit at phone sizes. */
 @container (max-width: 380px) {
   .il-player > .il-commerce--open {
     inset: 5px 5px 48px;
     width: auto;
     max-width: none;
     max-height: none;
+  }
+
+  .il-player > .il-commerce--done .il-commerce-qr img {
+    width: 64px;
   }
 }
 
