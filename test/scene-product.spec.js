@@ -8,7 +8,7 @@ const route = origin + '/il-player/scene-product?project=p1&asset=asset-1&grant=
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');
 
 const card = {
-  id: 'dlv_1', format: 'super', start: 1000, end: 8000, window: 'm1',
+  id: 'dlv_1', format: 'super', start: 1000, end: 8000, holdUntil: 600000, window: 'm1',
   imageUrl: 'https://ads-images.test/apron.png', mimeType: 'image/png',
   impressionUrl: 'https://ads.iadserver.com/events/dlv_1/impression',
   commerce: {
@@ -74,7 +74,7 @@ test('a plan with commerce shows the product card in the scene, fires the impres
   await page.getByRole('button', { name: 'Play', exact: true }).first().click();
   const open = page.getByRole('button', { name: 'View product' });
   await expect(open).toBeVisible();
-  expect(seen.routes).toEqual([route + '&window=m1&locale=en']);
+  expect(seen.routes.map((url) => url.split('&scene=')[0])).toEqual([route + '&window=m1&locale=en']);
   await expect.poll(() => seen.impressions).toBe(1);
   await open.click();
   await expect.poll(() => seen.views).toBe(1);
@@ -133,7 +133,7 @@ test('a 204 shows nothing and asks the window only once', async ({ page, context
   await page.goto(origin + embedPath({ src: program, locale: 'es', embed: { playback: { muted: true } }, ads: { plan: plan() } }));
   await page.getByRole('button', { name: 'Reproducir', exact: true }).first().click();
   await expect.poll(() => page.locator('video').evaluate((video) => video.currentTime)).toBeGreaterThan(3);
-  expect(seen.routes).toEqual([route + '&window=m1&locale=es']);
+  expect(seen.routes.map((url) => url.split('&scene=')[0])).toEqual([route + '&window=m1&locale=es']);
   await expect(page.locator('.il-commerce')).toHaveCount(0);
 });
 
@@ -328,7 +328,7 @@ for (const [width, height] of [[360, 202], [320, 180]]) {
       return panel.contains(panel.ownerDocument.activeElement) && box.top >= view.top - 0.5 && box.bottom <= view.bottom + 0.5;
     });
     expect(focused).toBe(true);
-    await page.keyboard.press('ArrowDown');
+    // The compact panel has room for the chosen variant, so focus starts on it.
     await expect(frame.locator('.il-commerce-variants button').first()).toBeFocused();
   });
 }

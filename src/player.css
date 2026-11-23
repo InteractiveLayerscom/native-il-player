@@ -406,55 +406,30 @@
   }
 }
 
-/* The SDK's product card sits above the control bar and over the centre button, so both stay reachable. */
-.il-player > .il-commerce {
-  z-index: 5;
-  right: 10px;
-  bottom: 60px;
-  max-width: calc(100% - 20px);
-  font-size: clamp(12px, 1.9cqw, 18px);
+/* The SDK places its product card, scene buttons and overlay above this much of the player: the control bar. */
+.il-player {
+  --il-safe-bottom: 48px;
 }
 
-.il-player > .il-commerce--open {
-  top: auto;
-  bottom: 60px;
-  max-height: calc(100% - 72px);
-}
-
+/* On a phone the ad player's Skip button is where the control bar sits. During an ad the bar goes to the top right
+   with play, mute and fullscreen (or leaving theater mode); the timeline has nothing to seek. */
 @container (max-width: 500px) {
-  .il-player > .il-commerce,
-  .il-player > .il-commerce--open {
-    right: 5px;
-    bottom: 48px;
+  .il-player--ad-break .il-player__toolbar {
+    inset: 5px 5px auto auto;
+    gap: 4px;
   }
 
-  .il-player > .il-commerce--open {
-    max-height: calc(100% - 56px);
-  }
-}
-
-/* A small embed gives the open card the whole picture above the controls; it scrolls inside. After Buy, the QR
-   without its caption fits beside the link at phone sizes. */
-@container (max-width: 380px) {
-  .il-player > .il-commerce--open {
-    inset: 5px 5px 48px;
-    width: auto;
-    max-width: none;
-    max-height: none;
-  }
-
-  /* The QR stays at a size a phone camera can read; its caption, which costs the height, gives way. */
-  .il-player > .il-commerce--done .il-commerce-qr img {
-    width: 84px;
-  }
-
-  .il-player > .il-commerce--done .il-commerce-qr span {
+  .il-player--ad-break .il-player__timeline,
+  .il-player--ad-break .il-player__time,
+  .il-player--ad-break .il-player__menu-wrap,
+  .il-player--ad-break .il-player__button--transcript,
+  .il-player--ad-break .il-player__volume-group input {
     display: none;
   }
-}
 
-.il-player--ad-break > .il-commerce {
-  display: none;
+  .il-player--ad-break > .il-commerce {
+    --il-safe-bottom: 0px;
+  }
 }
 
 /* While the viewer looks at a product the video is paused under it: the centre play button would sit behind

@@ -202,7 +202,7 @@ function mount(target, config = {}, bridge = false) {
   });
 
   const captionsMenu = menu('captions', 'captions');
-  const transcriptButton = button(toolbar, 'button', () => viewerUI.openTranscript(transcriptButton));
+  const transcriptButton = button(toolbar, 'button il-player__button--transcript', () => viewerUI.openTranscript(transcriptButton));
   transcriptButton.setAttribute('aria-expanded', 'false');
   shape(transcriptButton, 'transcript');
   const chapterMenu = menu('chapters', 'chapters');
@@ -525,7 +525,7 @@ function mount(target, config = {}, bridge = false) {
   }
 
   // The first play starts the ads; with a pre-roll it holds the content until the break starts,
-  // IMA gives up, or 4 seconds per request pass (8 s at most, plus 0.5 s so the module settles a
+  // IMA gives up, or 5 seconds per request pass (the module's own attempt limit) (8 s at most, plus 0.5 s so the module settles a
   // list of several requests first), because the module skips a pre-roll once content is past 1 s.
   function startAds(play) {
     if (!plan || adsStarted) return false;
@@ -535,7 +535,7 @@ function mount(target, config = {}, bridge = false) {
     const preroll = cuts.find(cut => cut?.at === 0);
     if (adsFailed || !preroll) return false;
     const requests = Array.isArray(preroll.requests) && preroll.requests.length ? preroll.requests.length : 1;
-    const wait = Math.min(4000 * requests, 8000) + (requests > 1 ? 500 : 0);
+    const wait = Math.min(5000 * requests, 8000) + (requests > 1 ? 500 : 0);
     hold = { play, timer: view.setTimeout(releaseHold, wait) };
     refresh();
     return true;
