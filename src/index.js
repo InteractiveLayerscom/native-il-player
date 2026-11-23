@@ -97,6 +97,8 @@ function mount(target, config = {}, bridge = false) {
   const metadata = embedMetadata(config.metadata, doc.baseURI, demo);
   let embed = mergeEmbed(initialEmbed(demo && !config.src), config.embed);
   let source;
+  let contentClock = null;
+  let stitchedClock = null;
   const colors = { ...defaults };
   let locale = normalizeLocale(config.locale);
   let features = config.features ?? {};
@@ -142,6 +144,8 @@ function mount(target, config = {}, bridge = false) {
   const poster = httpUrl(config.poster ?? (demo ? demoAsset('poster.jpg').href : null), doc.baseURI);
   if (poster) video.poster = poster.href;
   const hls = isHlsSource(src, config.type);
+  // MediaTailor stitched the video ads into this HLS: graphics follow the content clock the SDK reads from hls.js.
+  const stitched = hls && plan?.timeline?.kind === 'stitched';
 
   const textTracks = safeTracks(video, config.captions ?? (demo ? demoCaptions : []), view.VTTCue);
   const configuredChapters = Array.isArray(config.chapters) ? cleanChapters(config.chapters) : null;
@@ -579,10 +583,17 @@ function mount(target, config = {}, bridge = false) {
 
   async function attachRealAds() {
     try {
-      const { attachAds } = await import('@interactivelayers/player-sdk/ads');
+      const { attachAds, hlsContentClock } = await import('@interactivelayers/player-sdk/ads');
       if (disposed) return;
+      if (contentClock) {
+        try {
+          stitchedClock = hlsContentClock({ hls: source.hls, video, plan });
+        } catch {
+          // A malformed timeline: no clock, so the ads module stays inert for this stitched plan.
+        }
+      }
       ads = attachAds({
-        session: sdk, video, stage, plan, linear: 'ima', adContainer,
+        session: sdk, video, stage, plan, linear: 'ima', adContainer, ...(stitchedClock ? { clock: contentClock } : {}),
         onEvent: event => {
           if (event?.type === 'break_start') {
             endHold();
@@ -671,7 +682,8 @@ function mount(target, config = {}, bridge = false) {
   source = loadSource(video, src, hls, {
     onError: () => fail('loadError'),
     onChoices: refreshPlaybackOptions,
-    preferNative: !restricted && (embed.controls.airplay || embed.controls.cast) &&
+    // Native HLS shows no segment to the page, so a stitched stream stays on hls.js wherever it runs.
+    preferNative: !stitched && !restricted && (embed.controls.airplay || embed.controls.cast) &&
       typeof video.webkitShowPlaybackTargetPicker === 'function',
     onManifest: !demo && !sdkEvents && !plan ? text => sdk?.updateManifest(text) : undefined,
   });
@@ -680,7 +692,20 @@ function mount(target, config = {}, bridge = false) {
   // the viewer chooses. Without `commerce` the session is exactly as before.
   const commerce = plan?.commerce && typeof plan.commerce === 'object'
     ? { get locale() { return locale; }, pauseOnOpen: true } : null;
-  const sdk = plan ? attachHtmlVideo({ video, stage, timeline: 'media', ...(commerce ? { commerce } : {}) }) : demo || sdkEvents || hls ? attachHtmlVideo({
+  // Without hls.js (a browser with no Media Source) a stitched plan gets no clock, and the ads module stays inert.
+  // The SDK's clock comes with the ads module, which loads only with a plan; the session reads it through this
+  // stand-in from the start (the ads module checks the session uses the clock it is given) and sees nothing
+  // until it is there.
+  if (stitched && source.hls) contentClock = {
+    time: () => stitchedClock ? stitchedClock.time() : null,
+    programTime: () => stitchedClock ? stitchedClock.programTime() : null,
+    onChange: listener => stitchedClock ? stitchedClock.onChange(listener) : () => {},
+    destroy: () => stitchedClock?.destroy(),
+  };
+  const sdk = plan ? attachHtmlVideo({
+    video, stage, ...(contentClock ? { programTime: contentClock.programTime } : { timeline: 'media' }),
+    ...(commerce ? { commerce } : {}),
+  }) : demo || sdkEvents || hls ? attachHtmlVideo({
     video, stage,
     programTime: demo ? () => demoClock(video) : () => source.programTime(programOrigin),
     ...(demo ? {
@@ -752,6 +777,7 @@ function mount(target, config = {}, bridge = false) {
       endHold();
       ads?.destroy();
       sdk?.destroy();
+      contentClock?.destroy();
       video.pause();
       if (linear) releaseLinear();
       source.destroy();

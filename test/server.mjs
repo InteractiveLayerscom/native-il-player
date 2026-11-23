@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { createReadStream, statSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
+import { makeStitched } from './stitched-fixture.mjs';
 
 const types = {
   '.html': 'text/html; charset=utf-8', '.js': 'application/javascript',
@@ -9,6 +10,8 @@ const types = {
 };
 const files = resolve('dist');
 const fixtures = resolve('test/fixtures');
+// A stream with ads stitched in as MediaTailor does it, made with ffmpeg on first use (see stitched-fixture.mjs).
+makeStitched(resolve(fixtures, 'stitched'));
 
 function serve(path, req, res) {
   try {

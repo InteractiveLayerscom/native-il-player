@@ -48,6 +48,8 @@ export function loadSource(video, url, hlsSource, { onError, onManifest, onChoic
   const audio = () => Array.from(engine?.audioTracks ?? nativeAudio ?? []);
   return {
     direct: !!url && !engine,
+    // The hls.js instance, when it plays the source (the content clock reads its fragments).
+    hls: engine ?? null,
     qualities() {
       const levels = engine?.levels ?? [];
       return levels.map((level, value) => {
