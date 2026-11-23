@@ -601,11 +601,14 @@ function mount(target, config = {}, bridge = false) {
           } else if (event?.type === 'break_end' || event?.type === 'break_error') {
             // A break error before the first play means IMA gave up: that play is not held.
             if (event.type === 'break_error' && !adBreak) adsFailed = true;
-            const resumes = adBreak;
+            // `held`: the viewer has the product open; the SDK resumes the content once it is closed.
+            const resumes = adBreak && !event.held;
             if (resumes) resuming = true;
             setAdBreak(false);
             if (resumes) resume(() => playMedia(video));
             if (event.type === 'break_error') releaseHold();
+          } else if (event?.type === 'content_released') {
+            refresh();
           } else if (event?.type === 'resume_blocked') {
             // The browser refused the module's own resume: the viewer starts the content.
             endHold();
