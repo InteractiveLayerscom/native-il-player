@@ -364,3 +364,45 @@ test('a chosen variant late in a long row is scrolled into view sideways', async
   });
   expect(inRow).toEqual({ label: 'Variante larga 8', scrolled: true, inside: true });
 });
+
+
+// iADServer's real answer for a designed Súper from the «Fila de productos» template: the whole product card is the action.
+const designedCard = {
+  id: 'dlv_1', format: 'super', start: 1000, end: 11000, holdUntil: 11000, window: 'm1',
+  impressionUrl: 'https://ads.iadserver.com/events/dlv_1/impression',
+  scene: { format: 'super', width: 1440, height: 216, durationMs: 10000, layers: [
+    { id: 'card', type: 'rect', x: 86, y: 26, width: 1267, height: 164, fill: '#151923', stroke: '#798399', strokeWidth: 2, radius: 12, productIndex: 0, action: 'product' },
+    { id: 'image', type: 'image', x: 99, y: 39, width: 380, height: 138, fill: '#242d41', radius: 7, fit: 'contain', binding: 'image', productIndex: 0, src: 'https://ads-images.test/apron.png' },
+    { id: 'title', type: 'text', x: 492, y: 39, width: 848, height: 64, fill: '#ffffff', text: 'Sartén de cocina (prueba IL)', fontSize: 29, fontWeight: 700, binding: 'title', productIndex: 0, maxLines: 2 },
+    { id: 'price', type: 'text', x: 492, y: 116, width: 848, height: 64, fill: '#ffc3ce', text: 'USD 10.0', fontSize: 38, fontWeight: 600, binding: 'price', productIndex: 0, maxLines: 1 },
+  ] },
+  products: [{ ...card.commerce, title: 'Sartén de cocina (prueba IL)', imageUrl: 'https://ads-images.test/apron.png' }],
+};
+
+for (const [width, height] of [[1280, 720], [390, 220]]) {
+  test(`at ${width}x${height} a designed banner shows a visible Buy, is not clipped, and Buy reaches the cart`, async ({ page, context }) => {
+    const seen = await serve(context, { answer: () => ({ status: 200, body: designedCard }) });
+    await page.setViewportSize({ width, height });
+    await page.goto(origin + embedPath({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan() } }));
+    await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+    const chip = page.locator('.il-scene-buy');
+    await expect(chip).toBeVisible({ timeout: 10000 });
+    await expect(chip).toHaveText('Buy');
+    const layout = await page.evaluate(() => {
+      const root = document.querySelector('.il-scene').getBoundingClientRect();
+      const inside = (sel) => { const r = document.querySelector(sel).getBoundingClientRect(); return r.top >= root.top - 0.5 && r.bottom <= root.bottom + 0.5 && r.left >= root.left - 0.5 && r.right <= root.right + 0.5; };
+      const buy = document.querySelector('.il-scene-buy');
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector("[data-layer-id='price'] div"));
+      const price = range.getBoundingClientRect(), b = buy.getBoundingClientRect();
+      return { title: inside("[data-layer-id='title']"), card: inside("[data-layer-id='card']"), chip: inside('.il-scene-buy'),
+        unclipped: buy.scrollWidth <= buy.clientWidth + 1, overPrice: price.left < b.right && price.right > b.left && price.top < b.bottom && price.bottom > b.top,
+        name: document.querySelector('.il-scene-action').getAttribute('aria-label') };
+    });
+    expect(layout).toEqual({ title: true, card: true, chip: true, unclipped: true, overPrice: false, name: 'Buy: Sartén de cocina (prueba IL)' });
+    const box = await chip.boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.locator('.il-commerce-buy').click();
+    await expect.poll(() => seen.handoffs.length).toBe(1);
+  });
+}

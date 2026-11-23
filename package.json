@@ -1,6 +1,6 @@
 {
   "name": "@interactivelayers/native-il-player",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,7 +12,7 @@
     "test": "npm run build && playwright test"
   },
   "dependencies": {
-    "@interactivelayers/player-sdk": "https://codeload.github.com/InteractiveLayerscom/IL-VideoPlayers-SDK/tar.gz/fdb51e9659b87ffad50e482d2eba597c4ba9c9da",
+    "@interactivelayers/player-sdk": "https://codeload.github.com/InteractiveLayerscom/IL-VideoPlayers-SDK/tar.gz/7e69da5dda9968a2ceb1bd9903246e0744987f46",
     "hls.js": "1.7.4"
   },
   "devDependencies": {
