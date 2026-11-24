@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 
 // The player page is served from an https origin (routed to the local server), as the Console serves it,
@@ -8,7 +12,7 @@ const route = origin + '/il-player/scene-product?project=p1&asset=asset-1&grant=
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');
 
 const card = {
-  id: 'dlv_1', format: 'super', start: 1000, end: 8000, holdUntil: 600000, window: 'm1',
+  id: 'dlv_1', format: 'super', start: 1000, end: 8000, window: 'm1',
   imageUrl: 'https://ads-images.test/apron.png', mimeType: 'image/png',
   impressionUrl: 'https://ads.iadserver.com/events/dlv_1/impression',
   commerce: {
@@ -55,7 +59,8 @@ async function serve(context, { answer = () => ({ status: 200, body: card }), em
     if (url.pathname.endsWith('/creativeView')) seen.views++;
     if (url.pathname === '/commerce/offer/dlv_1') {
       seen.handoffs.push(request.request().postData());
-      if (handoff !== 201) return request.fulfill({ status: handoff, headers: cors, contentType: 'application/json', body: '{"error":"offer_unavailable"}' });
+      const status = typeof handoff === 'function' ? handoff(JSON.parse(request.request().postData()).variantId) : handoff;
+      if (status !== 201) return request.fulfill({ status, headers: cors, contentType: 'application/json', body: '{"error":"offer_unavailable"}' });
       return request.fulfill({ status: 201, headers: cors, contentType: 'application/json',
         body: JSON.stringify({ continueUrl: 'https://shop.test/checkout', qrImageUrl: 'https://ads-images.test/qr.png' }) });
     }
@@ -368,7 +373,7 @@ test('a chosen variant late in a long row is scrolled into view sideways', async
 
 // iADServer's real answer for a designed Súper from the «Fila de productos» template: the whole product card is the action.
 const designedCard = {
-  id: 'dlv_1', format: 'super', start: 1000, end: 11000, holdUntil: 11000, window: 'm1',
+  id: 'dlv_1', format: 'super', start: 1000, end: 11000, window: 'm1',
   impressionUrl: 'https://ads.iadserver.com/events/dlv_1/impression',
   scene: { format: 'super', width: 1440, height: 216, durationMs: 10000, layers: [
     { id: 'card', type: 'rect', x: 86, y: 26, width: 1267, height: 164, fill: '#151923', stroke: '#798399', strokeWidth: 2, radius: 12, productIndex: 0, action: 'product' },
@@ -404,5 +409,207 @@ for (const [width, height] of [[1280, 720], [390, 220]]) {
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     await page.locator('.il-commerce-buy').click();
     await expect.poll(() => seen.handoffs.length).toBe(1);
+  });
+}
+
+
+// What the viewer sees once the SDK keeps an opened panel: it stays after its scene, with no time limit, until the
+// viewer closes it, another product opens, a break starts, or the media changes. The video is 18 s long.
+const playBar = (page) => page.locator('.il-player__toolbar').getByRole('button', { name: 'Play', exact: true });
+const seekTo = (page, seconds) => page.locator('video').evaluate((video, to) => { video.currentTime = to; }, seconds);
+const buy = (page) => page.getByRole('button', { name: 'Buy' });
+
+// Opens the product from the card, then plays on (opening pauses the video).
+async function openAndResume(page, context, serveOptions = {}, config = {}, setup = null) {
+  const seen = await serve(context, serveOptions);
+  await setup?.();
+  await page.goto(origin + embedPath({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan() }, ...config }));
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await page.getByRole('button', { name: 'View product' }).click();
+  await expect(buy(page)).toBeVisible();
+  await expect.poll(() => paused(page)).toBe(true);
+  await playBar(page).click();
+  await expect.poll(() => paused(page)).toBe(false);
+  return seen;
+}
+
+test('the scene graphic ends with its window while the panel the viewer opened stays', async ({ page, context }) => {
+  const designed = { ...designedCard, end: 6000, scene: { ...designedCard.scene, durationMs: 5000 } };
+  await serve(context, { answer: () => ({ status: 200, body: designed }) });
+  await page.goto(origin + embedPath({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan() } }));
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  const chip = page.locator('.il-scene-buy');
+  await expect(chip).toBeVisible({ timeout: 10000 });
+  const box = await chip.boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator('.il-commerce-buy')).toBeVisible();
+  await playBar(page).click();
+  await expect.poll(() => position(page), { timeout: 15000 }).toBeGreaterThan(6.5);
+  await expect(page.locator('.il-scene')).toHaveCount(0);
+  await expect(page.locator('.il-commerce-buy')).toBeVisible();
+  expect(await paused(page)).toBe(false);
+});
+
+test('an opened panel outlasts the old cue limit (holdUntil): it is still open seconds after it', async ({ page, context }) => {
+  await openAndResume(page, context, { answer: () => ({ status: 200, body: { ...card, holdUntil: 9000 } }) });
+  await seekTo(page, 14);
+  await expect.poll(() => position(page)).toBeGreaterThan(14);
+  await page.waitForTimeout(1500);
+  await expect(buy(page)).toBeVisible();
+});
+
+// A 100 s video with a keyframe every second, so the page can jump to any second of it; served with range support.
+function makeLongVideo() {
+  const dir = mkdtempSync(join(tmpdir(), 'il-long-'));
+  execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-f', 'lavfi', '-i', 'color=c=black:s=160x90:r=5:d=100',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '5', '-movflags', '+faststart', join(dir, 'long.mp4')]);
+  return dir;
+}
+const routeLongVideo = (context, dir) => context.route(origin + '/demo/long.mp4', (request) => {
+  const file = readFileSync(join(dir, 'long.mp4'));
+  const range = /^bytes=(\d+)-(\d*)$/.exec(request.request().headers().range ?? '');
+  const start = range ? Number(range[1]) : 0;
+  const end = range?.[2] ? Math.min(Number(range[2]), file.length - 1) : file.length - 1;
+  return request.fulfill({ status: range ? 206 : 200, contentType: 'video/mp4', body: file.subarray(start, end + 1),
+    headers: { 'Accept-Ranges': 'bytes', ...(range ? { 'Content-Range': `bytes ${start}-${end}/${file.length}` } : {}) } });
+});
+
+test('an opened panel is still there 60 s of content time after its scene, with no activity from the viewer', async ({ page, context }) => {
+  const dir = makeLongVideo();
+  try {
+    await openAndResume(page, context, {}, { src: '/demo/long.mp4', ads: { plan: plan({ duration: 100 }) } }, () => routeLongVideo(context, dir));
+    // The scene ended at 8 s; the old limit was 60 s of content time after that (68 s).
+    await seekTo(page, 80);
+    await expect.poll(() => position(page)).toBeGreaterThan(80);
+    await page.waitForTimeout(1500);
+    await expect(buy(page)).toBeVisible();
+    await seekTo(page, 99);
+    await page.waitForTimeout(500);
+    await expect(buy(page)).toBeVisible();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('with the scene over, Escape closes the panel and nothing is left on the video, which keeps playing', async ({ page, context }) => {
+  await openAndResume(page, context);
+  await seekTo(page, 10);
+  await expect.poll(() => position(page)).toBeGreaterThan(10);
+  await expect(buy(page)).toBeVisible();
+  // Escape acts from inside the panel (the viewer's Play click left focus on the control bar).
+  await page.getByRole('button', { name: 'Close' }).focus();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.il-commerce')).toHaveCount(0);
+  expect(await paused(page)).toBe(false);
+});
+
+test('Close closes a panel that outlasted its scene', async ({ page, context }) => {
+  await openAndResume(page, context);
+  await seekTo(page, 10);
+  await expect.poll(() => position(page)).toBeGreaterThan(10);
+  await page.getByRole('button', { name: 'Close' }).click();
+  await expect(page.locator('.il-commerce')).toHaveCount(0);
+  expect(await paused(page)).toBe(false);
+});
+
+test('at the end of the video the closed card goes', async ({ page, context }) => {
+  // Closed card: it goes with the end of the video even though its scene lasts to the end.
+  const long = { ...card, end: 18000 };
+  await serve(context, { answer: () => ({ status: 200, body: long }) });
+  await page.goto(origin + embedPath({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan() } }));
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await expect(page.getByRole('button', { name: 'View product' })).toBeVisible();
+  await seekTo(page, 17.5);
+  await expect.poll(() => page.locator('video').evaluate((video) => video.ended), { timeout: 10000 }).toBe(true);
+  await expect(page.getByRole('button', { name: 'View product' })).toHaveCount(0);
+});
+
+test('an open panel stays when the video ends, and closing it leaves the ended video as it was', async ({ page, context }) => {
+  await openAndResume(page, context);
+  await seekTo(page, 17.5);
+  await expect.poll(() => page.locator('video').evaluate((video) => video.ended), { timeout: 10000 }).toBe(true);
+  await page.waitForTimeout(500);
+  await expect(buy(page)).toBeVisible();
+  await page.getByRole('button', { name: 'Close' }).click();
+  await expect(page.locator('.il-commerce')).toHaveCount(0);
+  expect(await page.locator('video').evaluate((video) => video.ended)).toBe(true);
+});
+
+test('a 404 on Buy turns Buy off for that variant only; another variant can be bought', async ({ page, context }) => {
+  const two = { ...card, commerce: { ...card.commerce, variants: [
+    { id: 'gid://shopify/ProductVariant/101', label: 'Black / M', price: '100.00', availableForSale: true },
+    { id: 'gid://shopify/ProductVariant/102', label: 'Black / L', price: '100.00', availableForSale: true },
+  ] } };
+  const seen = await serve(context, { answer: () => ({ status: 200, body: two }), handoff: (variant) => (variant.endsWith('/101') ? 404 : 201) });
+  await page.goto(origin + embedPath({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: plan() } }));
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await page.getByRole('button', { name: 'View product' }).click();
+  await page.getByRole('button', { name: 'Black / M' }).click();
+  await buy(page).click();
+  await expect(page.locator('.il-commerce-result')).toHaveText('This offer is no longer available.');
+  await expect(buy(page)).toBeDisabled();
+  await page.getByRole('button', { name: 'Black / L' }).click();
+  await expect(buy(page)).toBeEnabled();
+  await expect(page.locator('.il-commerce-result')).toHaveText('');
+  await page.getByRole('button', { name: 'Black / M' }).click();
+  await expect(buy(page)).toBeDisabled();
+  await page.getByRole('button', { name: 'Black / L' }).click();
+  await buy(page).click();
+  await expect(page.getByRole('link', { name: 'Continue to Shopify' })).toHaveAttribute('href', 'https://shop.test/checkout');
+  expect(seen.handoffs.map((body) => JSON.parse(body).variantId.split('/').pop())).toEqual(['101', '102']);
+});
+
+// Two scenes 39 s apart (the plan's pacing allows a window only 30 s or more after the start of every one before it).
+// The viewer opens the first product and plays on: the next scene's product is asked for at its lead time with the
+// panel still open, its card waits behind the panel, and it is there once the panel is closed.
+for (const how of ['playback', 'seek']) {
+  test(`with a panel open, the next scene's product is asked for once and its card is there after Close (${how})`, async ({ page, context }) => {
+    const second = { ...card, id: 'dlv_2', start: 40000, end: 50000, window: 'm2',
+      impressionUrl: 'https://ads.iadserver.com/events/dlv_2/impression',
+      commerce: { ...card.commerce, id: 'gid://shopify/Product/200', title: 'Pan', handoffUrl: 'https://ads.iadserver.com/commerce/offer/dlv_2',
+        viewUrl: 'https://ads.iadserver.com/events/dlv_2/creativeView' } };
+    const twoScenes = plan({ duration: 100 });
+    twoScenes.commerce.windows = [{ id: 'm1', start_ms: 1000, end_ms: 8000 }, { id: 'm2', start_ms: 40000, end_ms: 50000 }];
+    const dir = makeLongVideo();
+    try {
+      const seen = await openAndResume(page, context, { answer: (url) => ({ status: 200, body: url.searchParams.get('window') === 'm2' ? second : card }) },
+        { src: '/demo/long.mp4', ads: { plan: twoScenes } }, () => routeLongVideo(context, dir));
+      const asked = (window) => seen.routes.filter((url) => new URL(url).searchParams.get('window') === window).length;
+      expect(asked('m1')).toBe(1);
+      expect(asked('m2')).toBe(0);
+      // The viewer's choice in the panel, which the next scene must not disturb.
+      await page.getByRole('button', { name: 'Black / M' }).focus();
+      if (how === 'playback') {
+        // 35 s is m2's lead time (5 s before 40 s): nothing is asked for before it, the request goes out as playback crosses it.
+        await seekTo(page, 33);
+        await expect.poll(() => position(page)).toBeGreaterThan(33);
+        expect(asked('m2')).toBe(0);
+        await expect.poll(() => position(page), { timeout: 15000 }).toBeGreaterThan(35.5);
+      } else {
+        await seekTo(page, 41);
+        await expect.poll(() => position(page)).toBeGreaterThan(41);
+      }
+      await expect.poll(() => asked('m2')).toBe(1);
+      await page.waitForTimeout(1000);
+      expect(asked('m2')).toBe(1);
+      // The first product's panel is untouched; the second card sits behind it and cannot be operated.
+      await expect(page.locator('.il-commerce--open .il-commerce-title')).toHaveText('Apron');
+      await expect(page.getByRole('button', { name: 'Black / M' })).toBeFocused();
+      await expect(page.getByRole('button', { name: 'Black / M' })).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('.il-commerce')).toHaveCount(2);
+      await expect(page.getByRole('button', { name: 'View product' })).toHaveCount(0);
+      await page.getByRole('button', { name: 'Close' }).click();
+      const next = page.getByRole('button', { name: 'View product' });
+      await expect(next).toBeVisible();
+      await next.focus();
+      await expect(next).toBeFocused();
+      await expect.poll(() => seen.impressions).toBe(2);
+      await next.click();
+      await expect(page.locator('.il-commerce--open .il-commerce-title')).toHaveText('Pan');
+      expect(seen.impressions).toBe(2);
+      expect(asked('m1') + asked('m2')).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 }
