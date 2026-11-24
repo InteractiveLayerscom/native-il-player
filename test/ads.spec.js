@@ -452,3 +452,29 @@ test('starts the content between 8 and 10 seconds when no ad server answers', as
   await expect.poll(() => video.evaluate(element => element.currentTime), { timeout: 6000 }).toBeGreaterThan(1);
   await expect(page.locator('.il-player__center')).toBeHidden();
 });
+
+test('native GAM renewal keeps playback running and does not replay past cuts', async ({ page }) => {
+  const seen = await stubGoogle(page);
+  let renewals = 0;
+  await page.route('**/renew-plan', route => {
+    renewals++;
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(plan({
+      version: 2, native_gam: { contract: 'native-gam-plan-v1' },
+      expires_at: new Date(Date.now()+60000).toISOString(),
+      cuts: [{ ...cuts[0], id: 'past-mid', at: 1, position: 'midroll' }],
+      scenes: { ...scenes, windows: [{ id: 'new', start_ms: 5000, end_ms: 14000, targeting: {} }] },
+    })) });
+  });
+  await page.goto(embed({ src: program, locale: 'en', embed: { playback: { muted: true } }, ads: {
+    planUrl: '/renew-plan', plan: plan({ version: 2, native_gam: { contract: 'native-gam-plan-v1' },
+      expires_at: new Date(Date.now()+4000).toISOString(), cuts: [],
+      scenes: { ...scenes, windows: [{ id: 'later', start_ms: 15000, end_ms: 18000, targeting: {} }] },
+    }),
+  } }));
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await expect.poll(() => renewals, { timeout: 8000 }).toBe(1);
+  await expect.poll(() => seen.gampad.length, { timeout: 8000 }).toBe(1);
+  await expect.poll(() => page.locator('video').evaluate(video => video.currentTime)).toBeGreaterThan(4);
+  expect(seen.ima).toBe(0);
+  expect(await page.locator('video').evaluate(video => video.paused)).toBe(false);
+});

@@ -114,7 +114,7 @@ Provide the viewer's playback session values from your backend.
 
 The SDK uses UTC program time in milliseconds for cue timing. HLS uses the rendition's `EXT-X-PROGRAM-DATE-TIME` via HLS.js or the native HLS clock. For an MP4 connected to a synchronous session feed, supply the UTC instant corresponding to media time zero as `programDateTime`, for example `2026-01-01T12:00:00Z`. When the player has no UTC clock, playback continues without timed overlays. HLS.js can also pass in-band InteractiveLayers `EXT-X-DATERANGE` cues to the adapter when there is no session feed. In browsers using native HLS, use the session feed.
 
-The player bundles the SDK's `attachHtmlVideo` adapter from a pinned release revision. [InteractiveLayers Player SDK revision](https://github.com/InteractiveLayerscom/IL-VideoPlayers-SDK/tree/16dd1322e3df6b6ff5cfc397201902571a2e9077).
+The player bundles the SDK's `attachHtmlVideo` adapter from a pinned release revision. [InteractiveLayers Player SDK revision](https://github.com/InteractiveLayerscom/IL-VideoPlayers-SDK/tree/e7f86ca9896e7d5f26e59dd0bbaab8e0fbda221d).
 
 ### Real ads from an ad plan
 
@@ -176,3 +176,9 @@ npm test
 For a locally installed Google Chrome, run `IL_PLAYER_BROWSER_CHANNEL=chrome npm test`. The tests exercise the built embed with MP4 and HLS playback, actual rendition and language selections, caption and chapter seeking, appearance and live preview updates, local viewer state, metadata copy actions, remote playback configuration, Super and L through the SDK, and a linear break.
 
 With Python 3, Pillow 12, and FFmpeg with libx264, run `python3 scripts/make-demo.py` to regenerate the procedural video, audio, poster and creatives, plus the HLS test rendition. The media and artwork use the generator's own shapes, palettes, and synthesized audio.
+
+### Native GAM brief renewal
+
+A native GAM plan uses version 2 with `native_gam.contract: "native-gam-plan-v1"` and an expiry no more than two minutes away. The hosted embed supplies `ads.planUrl`, a signed same-origin renewal URL bound to the current video and verified publisher domain. No account credentials are sent. At expiry the SDK removes the old ads before fetching the next plan; video playback continues. A missing or unavailable plan leaves the content playing without those ads and is checked again after a bounded delay. A revoked grant (403/404) stops renewal.
+
+Renewals preserve the SDK session, graphic pacing and settled cuts. Cuts at or behind the current playhead are omitted, and a response arriving after unmount cannot attach. The backend retains the commerce viewing session across this refresh. A version 2 plan without a valid renewal URL expires safely but cannot resume advertising until a new page load. Existing version 1 behavior is unchanged.
