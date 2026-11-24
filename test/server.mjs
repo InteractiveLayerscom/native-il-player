@@ -6,7 +6,7 @@ import { makeStitched } from './stitched-fixture.mjs';
 const types = {
   '.html': 'text/html; charset=utf-8', '.js': 'application/javascript',
   '.css': 'text/css', '.mp4': 'video/mp4', '.jpg': 'image/jpeg', '.png': 'image/png',
-  '.m3u8': 'application/vnd.apple.mpegurl', '.ts': 'video/mp2t',
+  '.m3u8': 'application/vnd.apple.mpegurl', '.ts': 'video/mp2t', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
 };
 const files = resolve('dist');
 const fixtures = resolve('test/fixtures');

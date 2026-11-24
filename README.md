@@ -23,7 +23,8 @@ For a release, copy the build to an immutable versioned directory and preserve i
 | `dist/ads-*.js` | Ads module, loaded from the same directory only when the configuration has an ad plan |
 | `dist/native-il-player.css` | Player and SDK styles |
 | `dist/demo/` | Original program, poster, Super and L artwork, and the four-second linear ad |
-| `dist/THIRD-PARTY-NOTICES.md` and `dist/licenses/` | Dependency notices and license text |
+| `dist/fonts/` | The product panels' font (`Montserrat-wght.woff2`) and its license (`OFL.txt`), copied from the SDK package at build time. Loaded only when a product card is on screen |
+| `dist/THIRD-PARTY-NOTICES.md` and `dist/licenses/` | Dependency notices and license text, including the font's |
 | `dist/index.html` | Optional standalone demo page |
 
 Allow CORS for ES modules served from a different origin. HLS manifests, renditions, segments, and the playback session feed also need CORS when served from a different origin. A page with a Content Security Policy can allow `worker-src blob:` for the HLS engine's built-in worker and `media-src blob:` for Media Source playback.
@@ -132,6 +133,8 @@ When the plan has a `commerce` part (the scene product), the player shows the pr
 The plan arrives inline in the hosted page, so `commerce.url` must be on that page's origin; a plan whose `commerce.url` points elsewhere shows no product (its other ads still play). The breaks' iADServer requests carry the plan's `commerce.session`, so iADServer counts breaks and products in one session.
 
 Buying from an embed: the player usually runs in an iframe on the publisher's page. **Continue to Shopify** is a link the viewer taps, which popup blockers allow. If the publisher adds a `sandbox` attribute to the iframe, it must include `allow-popups allow-popups-to-escape-sandbox` for that link to open (with `allow-scripts allow-same-origin`, which the player already needs). Inside any iframe the card also shows the purchase QR, so a viewer whose embed blocks new tabs can finish on a phone. The embed page's Content-Security-Policy must allow `connect-src` to its own origin and to `https://ads.iadserver.com`, and `img-src https:` for the product images and the QR. The card's styles ship in `native-il-player.css`; nothing is injected at run time, so a page whose `style-src` allows only its own files and a nonce still shows the card (brand colours are set through the element's style object).
+
+The product panels are set in Montserrat, which the SDK names `IL Montserrat`. The player declares that family once per document, from `fonts/Montserrat-wght.woff2` in the folder of its own bundle, so the font is not in the stylesheet and a player that never shows a product never downloads it (216 KB, once, when the first card appears). A bundle with no http(s) address of its own, or a browser without variable fonts or the FontFace API, declares nothing and the panels use the next font in their list (`Montserrat` if the page has it, then `Inter` and `system-ui`). Two things must allow the file: when the embed page is on another origin than the bundle (the CDN), the folder must send `Access-Control-Allow-Origin` on `fonts/`, and the page's Content-Security-Policy needs `font-src` for the bundle's folder, because `default-src 'none'` blocks fonts. Without either, the card is drawn in the fallback font and everything else works.
 
 The console preview simulator is independent of the plan: with `demo: true` or `preview: true`, the player ignores `ads.plan` and never contacts Google.
 
