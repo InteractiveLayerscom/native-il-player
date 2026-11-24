@@ -2,6 +2,7 @@ import { attachHtmlVideo } from '@interactivelayers/player-sdk';
 import '@interactivelayers/player-sdk/player.css';
 import { demoAsset, demoCaptions, demoChapters, demoClock, demoFeed, demoOriginalLanguage } from './demo.js';
 import { embedMetadata, initialEmbed, mergeEmbed } from './embed-settings.js';
+import { declareFont } from './font.js';
 import { icon } from './icons.js';
 import { copy, normalizeLocale } from './locale.js';
 import { httpUrl, isHlsSource, loadSource } from './source.js';
@@ -90,6 +91,7 @@ function mount(target, config = {}, bridge = false) {
   config = config && typeof config === 'object' ? config : {};
   const doc = host.ownerDocument;
   const view = doc.defaultView;
+  declareFont(doc, view);
   const lifecycle = new view.AbortController();
   const bind = (node, type, callback) => node.addEventListener(type, callback, { signal: lifecycle.signal });
   const demo = config.demo === true;
