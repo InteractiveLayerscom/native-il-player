@@ -8,6 +8,7 @@ import { copy, normalizeLocale } from './locale.js';
 import { httpUrl, isHlsSource, loadSource } from './source.js';
 import { createPlaybackOptions } from './playback-options.js';
 import { createViewerUI } from './viewer-ui.js';
+import { planRenewal } from './plan-renewal.js';
 import './player.css';
 import './embed.css';
 
@@ -133,8 +134,18 @@ function mount(target, config = {}, bridge = false) {
   host.replaceChildren(stage);
 
   const video = node('video', 'video', stage);
-  const plan = !demo && config.preview !== true && config.ads?.plan && typeof config.ads.plan === 'object' &&
+  let plan = !demo && config.preview !== true && config.ads?.plan && typeof config.ads.plan === 'object' &&
     !Array.isArray(config.ads.plan) ? config.ads.plan : null;
+  const renewal = plan?.version === 2 ? planRenewal({
+    url: config.ads?.planUrl, origin: view.location.origin, assetId: plan.asset_id,
+    onPlan: async next => {
+      if (disposed) return;
+      ads?.destroy();
+      plan = { ...next, cuts: (next.cuts ?? []).filter(cut => cut.at > video.currentTime) };
+      adsFailed = false;
+      await attachRealAds();
+    },
+  }) : null;
   const adContainer = plan ? node('div', 'ad-container', stage) : null;
   video.playsInline = true;
   video.preload = 'metadata';
@@ -597,7 +608,11 @@ function mount(target, config = {}, bridge = false) {
       ads = attachAds({
         session: sdk, video, stage, plan, linear: 'ima', adContainer, ...(stitchedClock ? { clock: contentClock } : {}),
         onEvent: event => {
-          if (event?.type === 'break_start') {
+          if (event?.type === 'plan_expired') {
+            setAdBreak(false);
+            releaseHold();
+            void renewal?.expired();
+          } else if (event?.type === 'break_start') {
             endHold();
             setAdBreak(true);
           } else if (event?.type === 'break_end' || event?.type === 'break_error') {
@@ -780,6 +795,7 @@ function mount(target, config = {}, bridge = false) {
       viewerUI.destroy();
       options.destroy();
       endHold();
+      renewal?.destroy();
       ads?.destroy();
       sdk?.destroy();
       contentClock?.destroy();
