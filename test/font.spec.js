@@ -27,7 +27,7 @@ test.beforeAll(() => {
 test.afterEach(() => { for (const server of servers.splice(0)) server.close(); });
 
 const card = {
-  id: 'dlv_1', format: 'super', start: 1000, end: 20000, holdUntil: 600000, window: 'm1',
+  id: 'dlv_1', format: 'super', start: 1000, end: 20000, window: 'm1',
   imageUrl: 'https://ads-images.test/apron.png', mimeType: 'image/png',
   impressionUrl: 'https://ads.iadserver.com/events/dlv_1/impression',
   commerce: {

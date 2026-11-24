@@ -4,6 +4,7 @@ import { expect, test } from '@playwright/test';
 const origin = 'https://player.test';
 const program = '/demo/program.mp4';
 const delivery = 'D'.repeat(43);
+const position = (page) => page.locator('video').evaluate((video) => video.currentTime);
 const offer = {
   id: 'gid://shopify/Product/100', title: 'Apron', price: '100.00', currency: 'USD', locale: 'en',
   variants: [{ id: 'gid://shopify/ProductVariant/101', label: 'Black / M', price: '100.00', availableForSale: true }],
@@ -120,4 +121,59 @@ test('a product never opened changes nothing: the card goes with the ad and cont
   await expect(page.locator('video')).toHaveJSProperty('paused', false);
   await page.waitForTimeout(800);
   expect(await page.evaluate(() => window.contentPlays)).toBe(1);
+});
+
+// A scene product the viewer opened and then played on with: a video break closes it, the playing ad's own product is the one that shows.
+test('a video break starting closes the panel opened in the content, and the playing ad keeps its own', async ({ page }) => {
+  const sceneCard = {
+    id: 'dlv_scene', format: 'super', start: 1000, end: 4500, window: 'm1',
+    imageUrl: 'https://ads-images.test/apron.png', mimeType: 'image/png',
+    impressionUrl: 'https://ads.iadserver.com/events/dlv_scene/impression',
+    commerce: { ...offer, id: 'gid://shopify/Product/300', title: 'Scene Pan', handoffUrl: 'https://ads.iadserver.com/commerce/offer/dlv_scene',
+      viewUrl: 'https://ads.iadserver.com/events/dlv_scene/creativeView' },
+  };
+  const withMidroll = plan();
+  withMidroll.cuts = [withMidroll.cuts[0], { ...withMidroll.cuts[0], id: 'mid', at: 5, position: 'midroll' }];
+  withMidroll.commerce.windows = [{ id: 'm1', start_ms: 1000, end_ms: 4500 }];
+  // IMA schedules the plan's VMAP mid-roll itself; here the page reports that pod starting, as IMA would.
+  const ima = fakeIma.replace('window.endAd = ', `window.startMidroll = () => { manager.fire('pause', {});
+        manager.fire('started', { getAd: () => ({ getAdId: () => 'il-shop-midroll-${delivery}', getCreativeId: () => 'cr1' }) }); };
+      window.endAd = `);
+  await page.route('**/ima3.js', (route) => route.fulfill({ contentType: 'application/javascript', body: ima }));
+  await page.route(origin + '/**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/il-player/scene-product') return route.fulfill({ contentType: 'application/json', body: JSON.stringify(sceneCard) });
+    if (url.pathname === '/il-player/break-product') {
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ id: url.searchParams.get('delivery'),
+        format: 'midroll', linearCreativeId: url.searchParams.get('creative'), start: 0, end: 60000, commerce: offer }) });
+    }
+    const response = await route.fetch({ url: 'http://127.0.0.1:4194' + url.pathname + url.search });
+    return route.fulfill({ response });
+  });
+  await page.route('https://ads-images.test/**', (route) => route.fulfill({ contentType: 'image/png',
+    body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64') }));
+  await page.route('https://ads.iadserver.com/**', (route) => {
+    const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'content-type' };
+    return route.fulfill({ status: 204, headers: cors });
+  });
+  const config = { src: program, locale: 'en', embed: { playback: { muted: true } }, ads: { plan: withMidroll } };
+  await page.goto(origin + '/embed?config=' + encodeURIComponent(JSON.stringify(config)));
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  // The pre-roll plays out untouched, then the content runs and the scene's card shows.
+  await expect(page.locator('.il-player--ad-break')).toHaveCount(1);
+  await page.evaluate(() => window.endAd());
+  await expect(page.locator('.il-player--ad-break')).toHaveCount(0);
+  await page.getByRole('button', { name: 'View product' }).click();
+  await expect(page.locator('.il-commerce-title')).toHaveText('Scene Pan');
+  await expect(page.locator('video')).toHaveJSProperty('paused', true);
+  await page.locator('.il-player__toolbar').getByRole('button', { name: 'Play', exact: true }).click();
+  // The mid-roll at 5 s starts with the panel still open: the panel goes, the ad's own card (its own product) is there.
+  await page.locator('video').evaluate((video) => { video.currentTime = 5; });
+  await expect.poll(() => position(page)).toBeGreaterThan(5);
+  await page.evaluate(() => window.startMidroll());
+  await expect(page.locator('.il-player--ad-break')).toHaveCount(1);
+  await expect(page.locator('.il-commerce-buy')).toBeHidden();
+  await page.locator('.il-commerce > button').click();
+  await expect(page.locator('.il-commerce-title')).toHaveText('Apron');
+  await expect(page.locator('.il-commerce-buy')).toBeVisible();
 });
